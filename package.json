@@ -1,16 +1,24 @@
 {
-  "name": "quantum-chat-frontend",
+  "name": "quantumchat-frontend",
   "version": "1.0.0",
   "private": true,
-  "description": "Quantum Chat frontend apps",
+  "type": "module",
   "scripts": {
-    "predev": "npx --yes kill-port 5173 5174 5175 5176",
-    "dev": "concurrently -n admin,widget -c blue,green \"npm run dev --prefix ./admin\" \"npm run dev --prefix ./widget\"",
-    "dev:admin": "npm run dev --prefix ./admin",
-    "dev:widget": "npm run dev --prefix ./widget",
-    "build": "npm run build --prefix ./widget && npm run build --prefix ./admin && npm run build --prefix ./sdk"
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "axios": "^1.7.2",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.24.1",
+    "socket.io-client": "^4.7.5",
+    "tweetnacl": "^1.0.3",
+    "tweetnacl-util": "^0.15.1"
   },
   "devDependencies": {
-    "concurrently": "^9.1.2"
+    "@vitejs/plugin-react": "^4.3.1",
+    "vite": "^5.3.4"
   }
 }
