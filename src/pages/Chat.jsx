@@ -29,6 +29,28 @@ export default function Chat() {
   const selectedUserRef = useRef(null);
   selectedUserRef.current = selectedUser;
 
+  // Scroll to bottom helper
+  const scrollToBottom = useCallback((behavior = 'smooth') => {
+    if (messageListRef.current) {
+      const el = messageListRef.current;
+      el.scrollTo({
+        top: el.scrollHeight,
+        behavior,
+      });
+    }
+    setHasUnread(false);
+  }, []);
+
+  // Track scroll position of message list to toggle unread message bubble helper
+  const handleScroll = useCallback(() => {
+    if (!messageListRef.current) return;
+    const el = messageListRef.current;
+    const isUp = el.scrollHeight - el.scrollTop - el.clientHeight > 150;
+    if (!isUp) {
+      setHasUnread(false);
+    }
+  }, []);
+
   // Every sealed-box envelope names the public key it was sealed to
   // (targetPublicKey). Opening it just means finding that key's private
   // half in the local keyring — a public key never appears here, because
@@ -48,7 +70,11 @@ export default function Chat() {
 
   useEffect(() => {
     if (!hasLocalKeyring) return;
-    client.get('/users').then((res) => setUsers(res.data.data));
+    setLoadingUsers(true);
+    client
+      .get('/users')
+      .then((res) => setUsers(res.data.data))
+      .finally(() => setLoadingUsers(false));
   }, [hasLocalKeyring]);
 
   useEffect(() => {
@@ -60,12 +86,27 @@ export default function Chat() {
       const current = selectedUserRef.current;
       const otherId = raw.from === user.id ? raw.to : raw.from;
       if (!current || current.id !== otherId) return;
-      setMessages((prev) => [...prev, decorate(raw)]);
+
+      setMessages((prev) => {
+        const next = [...prev, decorate(raw)];
+        
+        // Conditional scroll context
+        if (messageListRef.current) {
+          const el = messageListRef.current;
+          const isUp = el.scrollHeight - el.scrollTop - el.clientHeight > 150;
+          if (isUp) {
+            setHasUnread(true);
+          } else {
+            setTimeout(() => scrollToBottom('smooth'), 50);
+          }
+        }
+        return next;
+      });
     }
 
     socket.on('message:new', handleIncoming);
     return () => socket.off('message:new', handleIncoming);
-  }, [hasLocalKeyring, user, decorate]);
+  }, [hasLocalKeyring, user, decorate, scrollToBottom]);
 
   // Socket.IO gives instant delivery where it's available (local dev), but
   // the deployed backend runs serverless (Vercel) and has no socket server
@@ -103,6 +144,11 @@ export default function Chat() {
 
   const canChat = hasLocalKeyring;
 
+  function handleSelectUser(u) {
+    setSelectedUser(u);
+    setSidebarOpen(false);
+  }
+
   async function handleSend(e) {
     e.preventDefault();
     if (!draft.trim() || !selectedUser) return;
@@ -120,6 +166,7 @@ export default function Chat() {
       const { data } = await client.post('/messages', { to: selectedUser.id, forRecipient, forSender });
       setMessages((prev) => [...prev, decorate(data.data)]);
       setDraft('');
+      setTimeout(() => scrollToBottom('smooth'), 50);
     } catch (err) {
       setError(err.response?.data?.error || 'Failed to send message');
     }
@@ -155,6 +202,7 @@ export default function Chat() {
         attachmentId: uploadRes.data.data.id,
       });
       setMessages((prev) => [...prev, decorate(data.data)]);
+      setTimeout(() => scrollToBottom('smooth'), 50);
     } catch (err) {
       setError(err.response?.data?.error || 'Failed to send attachment');
     }
@@ -187,23 +235,41 @@ export default function Chat() {
 
   return (
     <div className="chat-page">
-      <aside className="sidebar">
+      {/* Mobile overlay */}
+      <div
+        className={`sidebar-overlay ${sidebarOpen ? 'visible' : ''}`}
+        onClick={() => setSidebarOpen(false)}
+      />
+
+      <aside className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
         <div className="sidebar-header">
-          <div>
-            <div className="sidebar-username">{user.username}</div>
-            <div className="sidebar-lastseen">{formatLastSeen(user.lastLoginAt)}</div>
+          <div className="sidebar-brand">
+            <div className="sidebar-brand-mark">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+              </svg>
+            </div>
+            <div className="sidebar-user-info">
+              <div className="sidebar-username">{user.username}</div>
+              <div className="sidebar-lastseen">{formatLastSeen(user.lastLoginAt)}</div>
+            </div>
           </div>
-          <button className="link-button" onClick={logout}>
+          <button className="link-button" onClick={logout} aria-label="Log out of application">
             Log out
           </button>
         </div>
         {canChat && (
           <div className="sidebar-search">
-            <input placeholder="Search people…" value={search} onChange={(e) => setSearch(e.target.value)} />
+            <input placeholder="Search people…" value={search} onChange={(e) => setSearch(e.target.value)} aria-label="Search users list" />
           </div>
         )}
         {canChat ? (
-          <UserList users={filteredUsers} selectedUserId={selectedUser?.id} onSelect={setSelectedUser} />
+          <UserList
+            users={filteredUsers}
+            selectedUserId={selectedUser?.id}
+            onSelect={handleSelectUser}
+            loading={loadingUsers}
+          />
         ) : (
           <p className="empty-hint">Set up your device key to see people.</p>
         )}
@@ -231,34 +297,114 @@ export default function Chat() {
         {canChat && (
           <>
             <header className="chat-header">
-              <span>{title}</span>
+              <div className="chat-header-left">
+                <button
+                  className="mobile-menu-btn"
+                  onClick={() => setSidebarOpen(true)}
+                  aria-label="Open conversation sidebar"
+                >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <line x1="3" y1="6" x2="21" y2="6" />
+                    <line x1="3" y1="12" x2="21" y2="12" />
+                    <line x1="3" y1="18" x2="21" y2="18" />
+                  </svg>
+                </button>
+                <span>{title}</span>
+              </div>
               {selectedUser && <span className="last-seen-badge">{formatLastSeen(selectedUser.lastLoginAt)}</span>}
             </header>
-            <div className="message-list">
-              {messages.map((m) => (
-                <MessageBubble
-                  key={m.id || m._id}
-                  message={m}
-                  isMine={m.from === user.id}
-                  resolveAttachmentKey={(attachment) => resolveMySecretKey(attachment.targetPublicKey)}
-                />
-              ))}
-              <div ref={bottomRef} />
-            </div>
-            {error && <div className="auth-error">{error}</div>}
-            {selectedUser && (
-              <form className="composer" onSubmit={handleSend}>
-                <button type="button" className="attach-button" onClick={() => fileInputRef.current?.click()}>
-                  📎
-                </button>
-                <input ref={fileInputRef} type="file" hidden onChange={handleFileChange} />
-                <input
-                  placeholder="Type an encrypted message…"
-                  value={draft}
-                  onChange={(e) => setDraft(e.target.value)}
-                />
-                <button type="submit">Send</button>
-              </form>
+
+            {!selectedUser ? (
+              <div className="chat-empty-state">
+                <div className="chat-empty-icon">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+                  </svg>
+                </div>
+                <h2>No conversation selected</h2>
+                <p>Choose a person from the sidebar to start chatting</p>
+              </div>
+            ) : (
+              <>
+                <div
+                  className="message-list"
+                  ref={messageListRef}
+                  onScroll={handleScroll}
+                >
+                  {loadingMessages ? (
+                    <>
+                      <div className="skeleton-message-bubble theirs skeleton" />
+                      <div className="skeleton-message-bubble mine skeleton" />
+                      <div className="skeleton-message-bubble theirs skeleton" style={{ width: '45%' }} />
+                      <div className="skeleton-message-bubble mine skeleton" style={{ width: '35%' }} />
+                    </>
+                  ) : (
+                    messages.map((m, index) => {
+                      const prev = messages[index - 1];
+                      // Message is grouped if sent by same user within 2 minutes of the previous message
+                      const isGrouped =
+                        prev &&
+                        prev.from === m.from &&
+                        new Date(m.createdAt) - new Date(prev.createdAt) < 120000;
+
+                      return (
+                        <MessageBubble
+                          key={m.id || m._id}
+                          message={m}
+                          isMine={m.from === user.id}
+                          resolveAttachmentKey={(attachment) =>
+                            resolveMySecretKey(attachment.targetPublicKey)
+                          }
+                          grouped={isGrouped}
+                        />
+                      );
+                    })
+                  )}
+                  <div ref={bottomRef} />
+                </div>
+
+                {hasUnread && (
+                  <button
+                    className="scroll-bottom-pill"
+                    onClick={() => scrollToBottom('smooth')}
+                    aria-label="Scroll to bottom to view new messages"
+                  >
+                    <span>New messages</span>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <line x1="12" y1="5" x2="12" y2="19" />
+                      <polyline points="19 12 12 19 5 12" />
+                    </svg>
+                  </button>
+                )}
+
+                {error && <div className="auth-error">{error}</div>}
+
+                <form className="composer" onSubmit={handleSend}>
+                  <button
+                    type="button"
+                    className="attach-button"
+                    onClick={() => fileInputRef.current?.click()}
+                    aria-label="Attach file to message"
+                  >
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+                    </svg>
+                  </button>
+                  <input ref={fileInputRef} type="file" hidden onChange={handleFileChange} />
+                  <input
+                    placeholder="Type an encrypted message…"
+                    value={draft}
+                    onChange={(e) => setDraft(e.target.value)}
+                    aria-label="Type message body"
+                  />
+                  <button type="submit" className="send-button" aria-label="Send encrypted message">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <line x1="22" y1="2" x2="11" y2="13" />
+                      <polygon points="22 2 15 22 11 13 2 9 22 2" />
+                    </svg>
+                  </button>
+                </form>
+              </>
             )}
           </>
         )}

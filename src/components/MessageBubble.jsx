@@ -1,9 +1,9 @@
 import AttachmentBubble from './AttachmentBubble.jsx';
 
-export default function MessageBubble({ message, isMine, resolveAttachmentKey }) {
+export default function MessageBubble({ message, isMine, resolveAttachmentKey, grouped }) {
   return (
-    <div className={`message-row ${isMine ? 'mine' : 'theirs'}`}>
-      <div className={`message-bubble ${isMine ? 'mine' : 'theirs'}`}>
+    <div className={`message-row ${isMine ? 'mine' : 'theirs'} ${grouped ? 'grouped' : ''}`}>
+      <div className={`message-bubble ${isMine ? 'mine' : 'theirs'} ${grouped ? 'grouped' : ''}`}>
         {message.attachment && (
           <AttachmentBubble attachment={message.attachment} isMine={isMine} resolveAttachmentKey={resolveAttachmentKey} />
         )}
