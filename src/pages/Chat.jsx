@@ -5,9 +5,18 @@ import { connectSocket, getSocket } from '../api/socket.js';
 import { sealMessage, unsealMessage, sealBytes, pickRandom } from '../crypto/keys.js';
 import { parseKeyFile } from '../crypto/keyFile.js';
 import { getCurrentKeySet, findSecretKeyForPublicKey } from '../crypto/keyStorage.js';
-import { cacheVoiceNote, normalizeAttachment, pickRecorderMimeType } from '../crypto/voiceCache.js';
+import { normalizeAttachment, pickRecorderMimeType } from '../crypto/voiceCache.js';
 import { playReceiveSound, playSendSound } from '../utils/sounds.js';
-import UserList from '../components/UserList.jsx';
+import {
+  conversationKeyForGroup,
+  conversationKeyForUser,
+  getConversationActivity,
+  isUnreadConversation,
+  markConversationRead,
+  setConversationActivity,
+} from '../utils/readState.js';
+import ConversationList from '../components/ConversationList.jsx';
+import CreateGroupModal from '../components/CreateGroupModal.jsx';
 import MessageBubble from '../components/MessageBubble.jsx';
 import EmojiPicker from '../components/EmojiPicker.jsx';
 
@@ -23,15 +32,22 @@ function formatVoiceTimer(seconds) {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 }
 
+function memberId(m) {
+  return String(m?.id || m?._id || m);
+}
+
 export default function Chat() {
   const { user, logout, regenerateKeys, importKeys, hasLocalKeyring } = useAuth();
 
   const [users, setUsers] = useState([]);
-  const [selectedUser, setSelectedUser] = useState(null);
+  const [groups, setGroups] = useState([]);
+  const [selected, setSelected] = useState(null); // { type: 'dm'|'group', id, ... }
   const [messages, setMessages] = useState([]);
   const [draft, setDraft] = useState('');
   const [error, setError] = useState('');
   const [search, setSearch] = useState('');
+  const [filter, setFilter] = useState('all');
+  const [showCreateGroup, setShowCreateGroup] = useState(false);
   const [importError, setImportError] = useState('');
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [loadingUsers, setLoadingUsers] = useState(false);
@@ -41,19 +57,21 @@ export default function Chat() {
   const [recordSeconds, setRecordSeconds] = useState(0);
   const [sendingVoice, setSendingVoice] = useState(false);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+  const [activityTick, setActivityTick] = useState(0);
   const messageListRef = useRef(null);
   const bottomRef = useRef(null);
   const fileInputRef = useRef(null);
   const keyFileInputRef = useRef(null);
-  const selectedUserRef = useRef(null);
+  const selectedRef = useRef(null);
   const mediaRecorderRef = useRef(null);
   const mediaStreamRef = useRef(null);
   const recordChunksRef = useRef([]);
   const recordTimerRef = useRef(null);
   const recordStartedAtRef = useRef(0);
-  selectedUserRef.current = selectedUser;
+  selectedRef.current = selected;
 
-  // Scroll to bottom helper
+  const bumpActivity = useCallback(() => setActivityTick((n) => n + 1), []);
+
   const scrollToBottom = useCallback((behavior = 'smooth') => {
     if (messageListRef.current) {
       const el = messageListRef.current;
@@ -65,7 +83,6 @@ export default function Chat() {
     setHasUnread(false);
   }, []);
 
-  // Track scroll position of message list to toggle unread message bubble helper
   const handleScroll = useCallback(() => {
     if (!messageListRef.current) return;
     const el = messageListRef.current;
@@ -75,39 +92,93 @@ export default function Chat() {
     }
   }, []);
 
-  // Every sealed-box envelope names the public key it was sealed to
-  // (targetPublicKey). Opening it just means finding that key's private
-  // half in the local keyring — a public key never appears here, because
-  // unsealing structurally requires a private key (see crypto/keys.js).
-  const resolveMySecretKey = useCallback((targetPublicKeyHex) => findSecretKeyForPublicKey(user.id, targetPublicKeyHex), [user]);
+  const resolveMySecretKey = useCallback(
+    (targetPublicKeyHex) => findSecretKeyForPublicKey(user.id, targetPublicKeyHex),
+    [user]
+  );
 
   const decorate = useCallback(
     (raw) => {
       const isMine = String(raw.from) === String(user.id);
-      const envelope = isMine ? raw.forSender : raw.forRecipient;
-      if (!envelope?.targetPublicKey) {
-        return { ...raw, id: raw.id || raw._id, attachment: normalizeAttachment(raw.attachment), text: null };
+      let text = null;
+      let hasEnvelope = false;
+
+      if (raw.group && Array.isArray(raw.envelopes)) {
+        const mine = raw.envelopes.find((e) => String(e.user) === String(user.id));
+        hasEnvelope = Boolean(mine?.targetPublicKey);
+        if (mine?.targetPublicKey) {
+          const mySecretKey = resolveMySecretKey(mine.targetPublicKey);
+          text = mySecretKey ? unsealMessage(mine, mySecretKey) : null;
+        }
+      } else {
+        const envelope = isMine ? raw.forSender : raw.forRecipient;
+        hasEnvelope = Boolean(envelope?.targetPublicKey);
+        if (envelope?.targetPublicKey) {
+          const mySecretKey = resolveMySecretKey(envelope.targetPublicKey);
+          text = mySecretKey ? unsealMessage(envelope, mySecretKey) : null;
+        }
       }
-      const mySecretKey = resolveMySecretKey(envelope.targetPublicKey);
-      const text = mySecretKey ? unsealMessage(envelope, mySecretKey) : null;
+
+      const reactions = (raw.reactions || []).map((r) => {
+        if (r.emoji && !r.forRecipient && !r.forSender) {
+          return { ...r, user: String(r.user), emoji: r.emoji };
+        }
+        const mineReaction = String(r.user) === String(user.id);
+        const reactionEnvelope = mineReaction ? r.forSender : r.forRecipient;
+        if (!reactionEnvelope?.targetPublicKey) {
+          return { ...r, user: String(r.user), emoji: null };
+        }
+        const sk = resolveMySecretKey(reactionEnvelope.targetPublicKey);
+        return {
+          ...r,
+          user: String(r.user),
+          emoji: sk ? unsealMessage(reactionEnvelope, sk) : null,
+        };
+      });
+
       return {
         ...raw,
         id: raw.id || raw._id,
         attachment: normalizeAttachment(raw.attachment),
-        text,
+        text: hasEnvelope ? text : null,
+        reactions,
       };
     },
     [user, resolveMySecretKey]
   );
 
-  useEffect(() => {
+  const recordActivityFromMessage = useCallback(
+    (raw) => {
+      const at = raw.createdAt || new Date().toISOString();
+      const from = raw.from;
+      if (raw.group) {
+        const key = conversationKeyForGroup(raw.group);
+        setConversationActivity(user.id, key, { at, from });
+      } else {
+        const otherId = String(raw.from) === String(user.id) ? raw.to : raw.from;
+        if (!otherId) return;
+        setConversationActivity(user.id, conversationKeyForUser(otherId), { at, from });
+      }
+      bumpActivity();
+    },
+    [user.id, bumpActivity]
+  );
+
+  const loadDirectory = useCallback(() => {
     if (!hasLocalKeyring) return;
     setLoadingUsers(true);
-    client
-      .get('/users')
-      .then((res) => setUsers(res.data.data))
+    Promise.all([client.get('/users'), client.get('/groups')])
+      .then(([usersRes, groupsRes]) => {
+        setUsers(usersRes.data.data || []);
+        setGroups(groupsRes.data.data || []);
+      })
+      .catch((err) => setError(err.response?.data?.error || 'Failed to load conversations'))
       .finally(() => setLoadingUsers(false));
   }, [hasLocalKeyring]);
+
+  useEffect(() => {
+    loadDirectory();
+  }, [loadDirectory]);
 
   useEffect(() => {
     if (!hasLocalKeyring) return;
@@ -115,13 +186,24 @@ export default function Chat() {
     const socket = getSocket();
     if (!socket) return undefined;
 
-    function handleIncoming(raw) {
-      const current = selectedUserRef.current;
+    function isCurrentConversation(raw) {
+      const current = selectedRef.current;
+      if (!current) return false;
+      if (raw.group) {
+        return current.type === 'group' && String(current.id) === String(raw.group);
+      }
       const otherId = String(raw.from) === String(user.id) ? raw.to : raw.from;
-      if (!current || String(current.id) !== String(otherId)) return;
+      return current.type === 'dm' && String(current.id) === String(otherId);
+    }
+
+    function handleIncoming(raw) {
+      recordActivityFromMessage(raw);
+      if (!isCurrentConversation(raw)) return;
 
       if (String(raw.from) !== String(user.id)) {
         playReceiveSound();
+        markConversationRead(user.id, selectedRef.current.key, raw.createdAt || new Date().toISOString());
+        bumpActivity();
       }
 
       setMessages((prev) => {
@@ -151,41 +233,50 @@ export default function Chat() {
     function handleReaction(raw) {
       const id = String(raw?.id || raw?._id || '');
       if (!id) return;
-      const current = selectedUserRef.current;
-      const otherId = String(raw.from) === String(user.id) ? raw.to : raw.from;
-      if (!current || String(current.id) !== String(otherId)) return;
+      if (!isCurrentConversation(raw)) return;
       setMessages((prev) => prev.map((m) => (String(m.id || m._id) === id ? decorate(raw) : m)));
+    }
+
+    function handleGroupNew(group) {
+      setGroups((prev) => {
+        if (prev.some((g) => String(g.id) === String(group.id))) {
+          return prev.map((g) => (String(g.id) === String(group.id) ? group : g));
+        }
+        return [group, ...prev];
+      });
     }
 
     socket.on('message:new', handleIncoming);
     socket.on('message:deleted', handleDeleted);
     socket.on('message:reaction', handleReaction);
+    socket.on('group:new', handleGroupNew);
     return () => {
       socket.off('message:new', handleIncoming);
       socket.off('message:deleted', handleDeleted);
       socket.off('message:reaction', handleReaction);
+      socket.off('group:new', handleGroupNew);
     };
-  }, [hasLocalKeyring, user, decorate, scrollToBottom]);
+  }, [hasLocalKeyring, user, decorate, scrollToBottom, recordActivityFromMessage, bumpActivity]);
 
-  // Socket.IO gives instant delivery where it's available (local dev), but
-  // the deployed backend runs serverless (Vercel) and has no socket server
-  // at all — without this, a new message only ever showed up after a full
-  // page reload. Polling is a blunt fallback, but it works everywhere.
   useEffect(() => {
-    if (!selectedUser || !hasLocalKeyring) return undefined;
+    if (!selected || !hasLocalKeyring) return undefined;
 
     let cancelled = false;
     let firstLoad = true;
+    const endpoint =
+      selected.type === 'group' ? `/groups/${selected.id}/messages` : `/messages/${selected.id}`;
+
     const fetchMessages = () => {
       if (firstLoad) setLoadingMessages(true);
       client
-        .get(`/messages/${selectedUser.id}`)
+        .get(endpoint)
         .then((res) => {
           if (cancelled) return;
-          const next = res.data.data.map(decorate);
-          // Skip the state update (and the auto-scroll-to-bottom it triggers)
-          // when polling turns up nothing new — otherwise re-reading history
-          // gets yanked back to the bottom every 3 seconds.
+          const next = (res.data.data || []).map(decorate);
+          if (next.length) {
+            const last = next[next.length - 1];
+            recordActivityFromMessage(last);
+          }
           setMessages((prev) => {
             const same =
               prev.length === next.length &&
@@ -200,6 +291,8 @@ export default function Chat() {
             return same ? prev : next;
           });
           if (firstLoad) {
+            markConversationRead(user.id, selected.key);
+            bumpActivity();
             setTimeout(() => scrollToBottom('auto'), 50);
           }
         })
@@ -217,84 +310,217 @@ export default function Chat() {
       cancelled = true;
       clearInterval(intervalId);
     };
-  }, [selectedUser, hasLocalKeyring, decorate, scrollToBottom]);
+  }, [selected, hasLocalKeyring, decorate, scrollToBottom, user.id, recordActivityFromMessage, bumpActivity]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
   const canChat = hasLocalKeyring;
+  const isGroupChat = selected?.type === 'group';
 
-  function handleSelectUser(u) {
-    setSelectedUser(u);
+  const usernameById = useMemo(() => {
+    const map = new Map();
+    for (const u of users) map.set(String(u.id), u.username);
+    map.set(String(user.id), user.username);
+    for (const g of groups) {
+      for (const m of g.members || []) {
+        const id = memberId(m);
+        if (m.username) map.set(id, m.username);
+      }
+    }
+    return map;
+  }, [users, groups, user]);
+
+  const conversations = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    const items = [];
+
+    for (const u of users) {
+      const key = conversationKeyForUser(u.id);
+      const activity = getConversationActivity(user.id, key);
+      const unread = isUnreadConversation(user.id, key, activity?.at, activity?.from);
+      items.push({
+        key,
+        type: 'dm',
+        id: u.id,
+        title: u.username || 'Unknown user',
+        subtitle: null,
+        lastLoginAt: u.lastLoginAt,
+        unread,
+        sortAt: activity?.at || u.lastLoginAt || '',
+        peer: u,
+      });
+    }
+
+    for (const g of groups) {
+      const key = conversationKeyForGroup(g.id);
+      const activity = getConversationActivity(user.id, key);
+      const unread = isUnreadConversation(user.id, key, activity?.at, activity?.from);
+      const memberCount = (g.members || []).length;
+      items.push({
+        key,
+        type: 'group',
+        id: g.id,
+        title: g.name,
+        subtitle: `${memberCount} member${memberCount === 1 ? '' : 's'}`,
+        lastLoginAt: g.updatedAt,
+        unread,
+        sortAt: activity?.at || g.updatedAt || g.createdAt || '',
+        group: g,
+      });
+    }
+
+    items.sort((a, b) => {
+      if (a.unread !== b.unread) return a.unread ? -1 : 1;
+      return String(b.sortAt).localeCompare(String(a.sortAt));
+    });
+
+    return items.filter((c) => {
+      if (filter === 'groups' && c.type !== 'group') return false;
+      if (filter === 'unread' && !c.unread) return false;
+      if (q && !(c.title || '').toLowerCase().includes(q)) return false;
+      return true;
+    });
+  }, [users, groups, user.id, search, filter, activityTick]);
+
+  function handleSelectConversation(c) {
+    setSelected(c);
+    setError('');
+    setDraft('');
+    setShowEmojiPicker(false);
     setSidebarOpen(false);
+    markConversationRead(user.id, c.key);
+    bumpActivity();
+  }
+
+  async function handleCreateGroup({ name, memberIds }) {
+    const { data } = await client.post('/groups', { name, memberIds });
+    const group = data.data;
+    setGroups((prev) => {
+      if (prev.some((g) => String(g.id) === String(group.id))) return prev;
+      return [group, ...prev];
+    });
+    handleSelectConversation({
+      key: conversationKeyForGroup(group.id),
+      type: 'group',
+      id: group.id,
+      title: group.name,
+      subtitle: `${(group.members || []).length} members`,
+      group,
+    });
+  }
+
+  function sealGroupEnvelopes(plaintext, group) {
+    const members = group.members || [];
+    const envelopes = [];
+    for (const member of members) {
+      const id = memberId(member);
+      let publicKey;
+      if (String(id) === String(user.id)) {
+        publicKey = pickRandom(getCurrentKeySet(user.id))?.publicKey;
+      } else {
+        const keys = (member.publicKeys || []).filter(Boolean);
+        publicKey = pickRandom(keys);
+      }
+      if (!publicKey) {
+        throw new Error(`Missing encryption keys for ${member.username || id}`);
+      }
+      envelopes.push({ user: id, ...sealMessage(plaintext, publicKey) });
+    }
+    return envelopes;
   }
 
   async function handleSend(e) {
     e.preventDefault();
-    if (!draft.trim() || !selectedUser) return;
+    if (!draft.trim() || !selected) return;
     try {
-      // Both sides pick a random key from the target's current 5-key pool —
-      // this conversation's ciphertext ends up spread across multiple keys
-      // instead of always the same one.
-      const myKey = pickRandom(getCurrentKeySet(user.id));
-      const recipientKeys = (selectedUser.publicKeys || []).filter(Boolean);
-      if (!myKey?.publicKey || recipientKeys.length === 0) {
-        setError('Missing encryption keys for this conversation');
-        return;
+      if (selected.type === 'group') {
+        const group = selected.group || groups.find((g) => String(g.id) === String(selected.id));
+        if (!group) {
+          setError('Group not found');
+          return;
+        }
+        const envelopes = sealGroupEnvelopes(draft, group);
+        const { data } = await client.post(`/groups/${selected.id}/messages`, { envelopes });
+        recordActivityFromMessage(data.data);
+        setMessages((prev) => {
+          const id = String(data.data.id || data.data._id);
+          if (prev.some((m) => String(m.id || m._id) === id)) return prev;
+          return [...prev, decorate(data.data)];
+        });
+      } else {
+        const peer = selected.peer || users.find((u) => String(u.id) === String(selected.id));
+        const myKey = pickRandom(getCurrentKeySet(user.id));
+        const recipientKeys = (peer?.publicKeys || []).filter(Boolean);
+        if (!myKey?.publicKey || recipientKeys.length === 0) {
+          setError('Missing encryption keys for this conversation');
+          return;
+        }
+        const forRecipient = sealMessage(draft, pickRandom(recipientKeys));
+        const forSender = sealMessage(draft, myKey.publicKey);
+        const { data } = await client.post('/messages', {
+          to: selected.id,
+          forRecipient,
+          forSender,
+        });
+        recordActivityFromMessage(data.data);
+        setMessages((prev) => [...prev, decorate(data.data)]);
       }
-      const recipientPublicKey = pickRandom(recipientKeys);
-      // Sealed twice: once to the recipient (so they can read it), once to
-      // my own key (so I can read my own sent history back — the ephemeral
-      // key from either seal is discarded right after sealing).
-      const forRecipient = sealMessage(draft, recipientPublicKey);
-      const forSender = sealMessage(draft, myKey.publicKey);
-      const { data } = await client.post('/messages', { to: selectedUser.id, forRecipient, forSender });
-      setMessages((prev) => [...prev, decorate(data.data)]);
       setDraft('');
       playSendSound();
+      markConversationRead(user.id, selected.key);
+      bumpActivity();
       setTimeout(() => scrollToBottom('smooth'), 50);
     } catch (err) {
-      setError(err.response?.data?.error || 'Failed to send message');
+      setError(err.response?.data?.error || err.message || 'Failed to send message');
     }
   }
 
-  async function sendAttachmentFile(file, { plainBytes, cacheAsVoice } = {}) {
-    if (!file || !selectedUser) return;
+  async function sendAttachmentFile(file, { plainBytes } = {}) {
+    if (!file || !selected || selected.type !== 'dm') return;
+    const peer = selected.peer || users.find((u) => String(u.id) === String(selected.id));
     const myKey = pickRandom(getCurrentKeySet(user.id));
-    const recipientKeys = (selectedUser.publicKeys || []).filter(Boolean);
+    const recipientKeys = (peer?.publicKeys || []).filter(Boolean);
     if (!myKey?.publicKey || recipientKeys.length === 0) {
       setError('Missing encryption keys for this conversation');
       return;
     }
     const recipientPublicKey = pickRandom(recipientKeys);
     const fileBytes = plainBytes || new Uint8Array(await file.arrayBuffer());
-    // Attachments are sealed to the recipient only (not doubled like text)
-    // to avoid uploading every file twice — the sender keeps their own
-    // copy locally, so they don't need a server-side readable copy too.
-    const sealed = sealBytes(fileBytes, recipientPublicKey);
+    const forRecipientFile = sealBytes(fileBytes, recipientPublicKey);
+    const forSenderFile = sealBytes(fileBytes, myKey.publicKey);
 
     const formData = new FormData();
-    formData.append('file', new Blob([sealed.cipherBytes], { type: file.type || 'application/octet-stream' }), file.name);
-    formData.append('recipientId', selectedUser.id);
-    formData.append('nonce', sealed.nonce);
-    formData.append('ephemeralPublicKey', sealed.ephemeralPublicKey);
-    formData.append('targetPublicKey', sealed.targetPublicKey);
+    formData.append(
+      'file',
+      new Blob([forRecipientFile.cipherBytes], { type: file.type || 'application/octet-stream' }),
+      file.name
+    );
+    formData.append(
+      'senderFile',
+      new Blob([forSenderFile.cipherBytes], { type: file.type || 'application/octet-stream' }),
+      file.name
+    );
+    formData.append('recipientId', selected.id);
+    formData.append('nonce', forRecipientFile.nonce);
+    formData.append('ephemeralPublicKey', forRecipientFile.ephemeralPublicKey);
+    formData.append('targetPublicKey', forRecipientFile.targetPublicKey);
+    formData.append('forSenderNonce', forSenderFile.nonce);
+    formData.append('forSenderEphemeralPublicKey', forSenderFile.ephemeralPublicKey);
+    formData.append('forSenderTargetPublicKey', forSenderFile.targetPublicKey);
     const uploadRes = await client.post('/attachments', formData);
     const attachmentId = uploadRes.data.data.id;
-
-    if (cacheAsVoice) {
-      cacheVoiceNote(attachmentId, { bytes: fileBytes, mimetype: file.type || 'audio/webm' });
-    }
 
     const forRecipient = sealMessage('', recipientPublicKey);
     const forSender = sealMessage('', myKey.publicKey);
     const { data } = await client.post('/messages', {
-      to: selectedUser.id,
+      to: selected.id,
       forRecipient,
       forSender,
       attachmentId,
     });
+    recordActivityFromMessage(data.data);
     setMessages((prev) => [...prev, decorate(data.data)]);
     playSendSound();
     setTimeout(() => scrollToBottom('smooth'), 50);
@@ -303,7 +529,7 @@ export default function Chat() {
   async function handleFileChange(e) {
     const file = e.target.files?.[0];
     e.target.value = '';
-    if (!file || !selectedUser) return;
+    if (!file || !selected || selected.type !== 'dm') return;
     try {
       await sendAttachmentFile(file);
     } catch (err) {
@@ -327,7 +553,7 @@ export default function Chat() {
   }
 
   async function startVoiceRecording() {
-    if (!selectedUser || recording || sendingVoice) return;
+    if (!selected || selected.type !== 'dm' || recording || sendingVoice) return;
     if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
       setError('Voice notes are not supported in this browser');
       return;
@@ -377,7 +603,7 @@ export default function Chat() {
 
         setSendingVoice(true);
         try {
-          await sendAttachmentFile(file, { plainBytes, cacheAsVoice: true });
+          await sendAttachmentFile(file, { plainBytes });
         } catch (err) {
           setError(err.response?.data?.error || 'Failed to send voice note');
         } finally {
@@ -439,7 +665,9 @@ export default function Chat() {
 
   async function handleDeleteMessage(messageId) {
     if (!messageId) return;
-    const confirmed = window.confirm('Delete this message for everyone? It will disappear for both of you with no trace.');
+    const confirmed = window.confirm(
+      'Delete this message for everyone? It will disappear for all participants with no trace.'
+    );
     if (!confirmed) return;
     try {
       await client.delete(`/messages/${messageId}`);
@@ -450,11 +678,31 @@ export default function Chat() {
   }
 
   async function handleReactMessage(messageId, emoji) {
-    if (!messageId || !emoji) return;
+    if (!messageId || !emoji || !selected || selected.type !== 'dm') return;
     try {
-      const { data } = await client.post(`/messages/${messageId}/reactions`, { emoji });
-      const updated = decorate(data.data);
-      setMessages((prev) => prev.map((m) => (String(m.id || m._id) === String(messageId) ? updated : m)));
+      const existing = messages.find((m) => String(m.id || m._id) === String(messageId));
+      const myReaction = (existing?.reactions || []).find((r) => String(r.user) === String(user.id));
+      if (myReaction?.emoji === emoji) {
+        const { data } = await client.post(`/messages/${messageId}/reactions`, { clear: true });
+        setMessages((prev) =>
+          prev.map((m) => (String(m.id || m._id) === String(messageId) ? decorate(data.data) : m))
+        );
+        return;
+      }
+
+      const peer = selected.peer || users.find((u) => String(u.id) === String(selected.id));
+      const myKey = pickRandom(getCurrentKeySet(user.id));
+      const recipientKeys = (peer?.publicKeys || []).filter(Boolean);
+      if (!myKey?.publicKey || recipientKeys.length === 0) {
+        setError('Missing encryption keys for this conversation');
+        return;
+      }
+      const forRecipient = sealMessage(emoji, pickRandom(recipientKeys));
+      const forSender = sealMessage(emoji, myKey.publicKey);
+      const { data } = await client.post(`/messages/${messageId}/reactions`, { forRecipient, forSender });
+      setMessages((prev) =>
+        prev.map((m) => (String(m.id || m._id) === String(messageId) ? decorate(data.data) : m))
+      );
     } catch (err) {
       setError(err.response?.data?.error || 'Failed to add reaction');
     }
@@ -484,15 +732,24 @@ export default function Chat() {
     }
   }
 
-  const title = useMemo(() => selectedUser?.username || 'Select a conversation', [selectedUser]);
-  const filteredUsers = useMemo(
-    () => users.filter((u) => u?.username?.toLowerCase().includes(search.toLowerCase())),
-    [users, search]
-  );
+  const title = useMemo(() => {
+    if (!selected) return 'Select a conversation';
+    return selected.title || (selected.type === 'group' ? 'Group' : 'Chat');
+  }, [selected]);
+
+  const headerSubtitle = useMemo(() => {
+    if (!selected) return null;
+    if (selected.type === 'group') {
+      const group = selected.group || groups.find((g) => String(g.id) === String(selected.id));
+      const count = (group?.members || []).length;
+      return count ? `${count} members` : 'Group chat';
+    }
+    const peer = selected.peer || users.find((u) => String(u.id) === String(selected.id));
+    return formatLastSeen(peer?.lastLoginAt);
+  }, [selected, groups, users]);
 
   return (
     <div className="chat-page">
-      {/* Mobile overlay */}
       <div
         className={`sidebar-overlay ${sidebarOpen ? 'visible' : ''}`}
         onClick={() => setSidebarOpen(false)}
@@ -517,14 +774,22 @@ export default function Chat() {
         </div>
         {canChat && (
           <div className="sidebar-search">
-            <input placeholder="Search people…" value={search} onChange={(e) => setSearch(e.target.value)} aria-label="Search users list" />
+            <input
+              placeholder="Search conversations…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              aria-label="Search conversations"
+            />
           </div>
         )}
         {canChat ? (
-          <UserList
-            users={filteredUsers}
-            selectedUserId={selectedUser?.id}
-            onSelect={handleSelectUser}
+          <ConversationList
+            conversations={conversations}
+            filter={filter}
+            onFilterChange={setFilter}
+            selectedKey={selected?.key}
+            onSelect={handleSelectConversation}
+            onCreateGroup={() => setShowCreateGroup(true)}
             loading={loadingUsers}
           />
         ) : (
@@ -568,10 +833,10 @@ export default function Chat() {
                 </button>
                 <span>{title}</span>
               </div>
-              {selectedUser && <span className="last-seen-badge">{formatLastSeen(selectedUser.lastLoginAt)}</span>}
+              {selected && <span className="last-seen-badge">{headerSubtitle}</span>}
             </header>
 
-            {!selectedUser ? (
+            {!selected ? (
               <div className="chat-empty-state">
                 <div className="chat-empty-icon">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
@@ -579,15 +844,11 @@ export default function Chat() {
                   </svg>
                 </div>
                 <h2>No conversation selected</h2>
-                <p>Choose a person from the sidebar to start chatting</p>
+                <p>Choose a person or group from the sidebar, or create a new group</p>
               </div>
             ) : (
               <>
-                <div
-                  className="message-list"
-                  ref={messageListRef}
-                  onScroll={handleScroll}
-                >
+                <div className="message-list" ref={messageListRef} onScroll={handleScroll}>
                   {loadingMessages ? (
                     <>
                       <div className="skeleton-message-bubble theirs skeleton" />
@@ -598,7 +859,6 @@ export default function Chat() {
                   ) : (
                     messages.map((m, index) => {
                       const prev = messages[index - 1];
-                      // Message is grouped if sent by same user within 2 minutes of the previous message
                       const isGrouped =
                         prev &&
                         String(prev.from) === String(m.from) &&
@@ -610,12 +870,13 @@ export default function Chat() {
                           message={m}
                           isMine={String(m.from) === String(user.id)}
                           currentUserId={user.id}
-                          resolveAttachmentKey={(attachment) =>
-                            resolveMySecretKey(attachment.targetPublicKey)
-                          }
+                          resolveSecretKey={resolveMySecretKey}
                           grouped={isGrouped}
+                          senderLabel={
+                            isGroupChat ? usernameById.get(String(m.from)) || 'Member' : undefined
+                          }
                           onDelete={handleDeleteMessage}
-                          onReact={handleReactMessage}
+                          onReact={isGroupChat ? undefined : handleReactMessage}
                         />
                       );
                     })
@@ -674,17 +935,19 @@ export default function Chat() {
                       <EmojiPicker onPick={insertEmoji} onClose={() => setShowEmojiPicker(false)} />
                     )}
                     <form className="composer" onSubmit={handleSend}>
-                      <button
-                        type="button"
-                        className="attach-button"
-                        onClick={() => fileInputRef.current?.click()}
-                        aria-label="Attach file to message"
-                        disabled={sendingVoice}
-                      >
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
-                        </svg>
-                      </button>
+                      {!isGroupChat && (
+                        <button
+                          type="button"
+                          className="attach-button"
+                          onClick={() => fileInputRef.current?.click()}
+                          aria-label="Attach file to message"
+                          disabled={sendingVoice}
+                        >
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+                          </svg>
+                        </button>
+                      )}
                       <button
                         type="button"
                         className={`attach-button ${showEmojiPicker ? 'active' : ''}`}
@@ -701,7 +964,13 @@ export default function Chat() {
                       </button>
                       <input ref={fileInputRef} type="file" hidden onChange={handleFileChange} />
                       <input
-                        placeholder={sendingVoice ? 'Sending voice note…' : 'Type an encrypted message…'}
+                        placeholder={
+                          sendingVoice
+                            ? 'Sending voice note…'
+                            : isGroupChat
+                              ? 'Type an encrypted group message…'
+                              : 'Type an encrypted message…'
+                        }
                         value={draft}
                         onChange={(e) => setDraft(e.target.value)}
                         aria-label="Type message body"
@@ -709,6 +978,13 @@ export default function Chat() {
                       />
                       {draft.trim() ? (
                         <button type="submit" className="send-button" aria-label="Send encrypted message" disabled={sendingVoice}>
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <line x1="22" y1="2" x2="11" y2="13" />
+                            <polygon points="22 2 15 22 11 13 2 9 22 2" />
+                          </svg>
+                        </button>
+                      ) : isGroupChat ? (
+                        <button type="submit" className="send-button" aria-label="Send encrypted message" disabled>
                           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                             <line x1="22" y1="2" x2="11" y2="13" />
                             <polygon points="22 2 15 22 11 13 2 9 22 2" />
@@ -738,6 +1014,14 @@ export default function Chat() {
           </>
         )}
       </main>
+
+      {showCreateGroup && (
+        <CreateGroupModal
+          users={users}
+          onClose={() => setShowCreateGroup(false)}
+          onCreate={handleCreateGroup}
+        />
+      )}
     </div>
   );
 }

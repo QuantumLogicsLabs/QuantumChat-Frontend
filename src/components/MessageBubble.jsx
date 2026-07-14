@@ -18,8 +18,9 @@ export default function MessageBubble({
   message,
   isMine,
   currentUserId,
-  resolveAttachmentKey,
+  resolveSecretKey,
   grouped,
+  senderLabel,
   onDelete,
   onReact,
 }) {
@@ -49,11 +50,12 @@ export default function MessageBubble({
     >
       <div className={`message-bubble-wrap ${isMine ? 'mine' : 'theirs'}`}>
         <div className={`message-bubble ${isMine ? 'mine' : 'theirs'} ${grouped ? 'grouped' : ''}`}>
+          {senderLabel && !isMine && !grouped && <div className="message-sender-label">{senderLabel}</div>}
           {message.attachment && (
             <AttachmentBubble
               attachment={message.attachment}
               isMine={isMine}
-              resolveAttachmentKey={resolveAttachmentKey}
+              resolveSecretKey={resolveSecretKey}
             />
           )}
           {message.text ? message.text : message.text === null ? <em>[Unable to decrypt message]</em> : null}
@@ -74,15 +76,17 @@ export default function MessageBubble({
 
         {menuOpen && (
           <div className={`message-menu ${isMine ? 'mine' : 'theirs'}`}>
-            <button
-              type="button"
-              onClick={() => {
-                setReactOpen(true);
-                setMenuOpen(false);
-              }}
-            >
-              React
-            </button>
+            {onReact && (
+              <button
+                type="button"
+                onClick={() => {
+                  setReactOpen(true);
+                  setMenuOpen(false);
+                }}
+              >
+                React
+              </button>
+            )}
             {isMine && (
               <button
                 type="button"
@@ -98,7 +102,7 @@ export default function MessageBubble({
           </div>
         )}
 
-        {reactOpen && (
+        {reactOpen && onReact && (
           <div className={`reaction-picker ${isMine ? 'mine' : 'theirs'}`}>
             {QUICK_REACTIONS.map((emoji) => (
               <button
@@ -107,7 +111,7 @@ export default function MessageBubble({
                 className={myReaction === emoji ? 'active' : ''}
                 onClick={() => {
                   setReactOpen(false);
-                  onReact?.(messageId, emoji);
+                  onReact(messageId, emoji);
                 }}
               >
                 {emoji}
@@ -126,6 +130,7 @@ export default function MessageBubble({
               className={`reaction-chip ${g.users.includes(String(currentUserId)) ? 'mine' : ''}`}
               onClick={() => onReact?.(messageId, g.emoji)}
               aria-label={`React with ${g.emoji}`}
+              disabled={!onReact}
             >
               <span>{g.emoji}</span>
               {g.count > 1 && <span className="reaction-count">{g.count}</span>}
