@@ -94,10 +94,18 @@ export function AuthProvider({ children }) {
     setUser(null);
   }, [user]);
 
+  const updateSessionUser = useCallback((nextUser) => {
+    if (!nextUser) return;
+    saveSession(getToken(), nextUser);
+    setUser(nextUser);
+  }, []);
+
   const hasLocalKeyring = user ? hasKeyring(user.id) : false;
 
   return (
-    <AuthContext.Provider value={{ user, register, login, logout, regenerateKeys, importKeys, hasLocalKeyring }}>
+    <AuthContext.Provider
+      value={{ user, register, login, logout, regenerateKeys, importKeys, hasLocalKeyring, updateSessionUser }}
+    >
       {children}
     </AuthContext.Provider>
   );

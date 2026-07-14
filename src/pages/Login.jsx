@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext.jsx';
+import ThemeToggle from '../components/ThemeToggle.jsx';
 
 export default function Login() {
   const { login } = useAuth();
@@ -26,6 +27,9 @@ export default function Login() {
 
   return (
     <div className="auth-page">
+      <div className="auth-page-topbar">
+        <ThemeToggle />
+      </div>
       <form className="auth-card" onSubmit={handleSubmit}>
         <div className="auth-brand">
           <div className="auth-brand-icon">
@@ -34,6 +38,7 @@ export default function Login() {
               <path d="M7 11V7a5 5 0 0 1 10 0v4" />
             </svg>
           </div>
+          <div className="auth-brand-name">QuantumChat</div>
           <h1>Welcome back</h1>
         </div>
 

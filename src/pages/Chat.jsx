@@ -19,11 +19,21 @@ import ConversationList from '../components/ConversationList.jsx';
 import CreateGroupModal from '../components/CreateGroupModal.jsx';
 import MessageBubble from '../components/MessageBubble.jsx';
 import EmojiPicker from '../components/EmojiPicker.jsx';
+import ThemeToggle from '../components/ThemeToggle.jsx';
+import ConfirmDialog from '../components/ConfirmDialog.jsx';
+import { getHiddenChatIds, hideChat, unhideChat } from '../utils/hiddenChats.js';
 
 const MAX_VOICE_SECONDS = 60;
+const ACTIVE_WINDOW_MS = 5 * 60 * 1000;
+
+function isRecentlyActive(iso) {
+  if (!iso) return false;
+  return Date.now() - new Date(iso).getTime() < ACTIVE_WINDOW_MS;
+}
 
 function formatLastSeen(iso) {
   if (!iso) return 'never logged in';
+  if (isRecentlyActive(iso)) return 'online';
   return `last seen ${new Date(iso).toLocaleString()}`;
 }
 
@@ -37,7 +47,7 @@ function memberId(m) {
 }
 
 export default function Chat() {
-  const { user, logout, regenerateKeys, importKeys, hasLocalKeyring } = useAuth();
+  const { user, logout, regenerateKeys, importKeys, hasLocalKeyring, updateSessionUser } = useAuth();
 
   const [users, setUsers] = useState([]);
   const [groups, setGroups] = useState([]);
@@ -57,7 +67,9 @@ export default function Chat() {
   const [recordSeconds, setRecordSeconds] = useState(0);
   const [sendingVoice, setSendingVoice] = useState(false);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
-  const [activityTick, setActivityTick] = useState(0);
+  const [hiddenChatIds, setHiddenChatIds] = useState(() => getHiddenChatIds(user?.id));
+  const [confirmDialog, setConfirmDialog] = useState(null);
+  const [confirmBusy, setConfirmBusy] = useState(false);
   const messageListRef = useRef(null);
   const bottomRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -193,12 +205,9 @@ export default function Chat() {
         return current.type === 'group' && String(current.id) === String(raw.group);
       }
       const otherId = String(raw.from) === String(user.id) ? raw.to : raw.from;
-      return current.type === 'dm' && String(current.id) === String(otherId);
-    }
-
-    function handleIncoming(raw) {
-      recordActivityFromMessage(raw);
-      if (!isCurrentConversation(raw)) return;
+      const blocked = (user.blockedUsers || []).map(String);
+      if (blocked.includes(String(otherId))) return;
+      if (!current || String(current.id) !== String(otherId)) return;
 
       if (String(raw.from) !== String(user.id)) {
         playReceiveSound();
@@ -319,76 +328,12 @@ export default function Chat() {
   const canChat = hasLocalKeyring;
   const isGroupChat = selected?.type === 'group';
 
-  const usernameById = useMemo(() => {
-    const map = new Map();
-    for (const u of users) map.set(String(u.id), u.username);
-    map.set(String(user.id), user.username);
-    for (const g of groups) {
-      for (const m of g.members || []) {
-        const id = memberId(m);
-        if (m.username) map.set(id, m.username);
-      }
+  function handleSelectUser(u) {
+    const peerId = String(u.id);
+    if (hiddenChatIds.includes(peerId)) {
+      setHiddenChatIds(unhideChat(user.id, peerId));
     }
-    return map;
-  }, [users, groups, user]);
-
-  const conversations = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    const items = [];
-
-    for (const u of users) {
-      const key = conversationKeyForUser(u.id);
-      const activity = getConversationActivity(user.id, key);
-      const unread = isUnreadConversation(user.id, key, activity?.at, activity?.from);
-      items.push({
-        key,
-        type: 'dm',
-        id: u.id,
-        title: u.username || 'Unknown user',
-        subtitle: null,
-        lastLoginAt: u.lastLoginAt,
-        unread,
-        sortAt: activity?.at || u.lastLoginAt || '',
-        peer: u,
-      });
-    }
-
-    for (const g of groups) {
-      const key = conversationKeyForGroup(g.id);
-      const activity = getConversationActivity(user.id, key);
-      const unread = isUnreadConversation(user.id, key, activity?.at, activity?.from);
-      const memberCount = (g.members || []).length;
-      items.push({
-        key,
-        type: 'group',
-        id: g.id,
-        title: g.name,
-        subtitle: `${memberCount} member${memberCount === 1 ? '' : 's'}`,
-        lastLoginAt: g.updatedAt,
-        unread,
-        sortAt: activity?.at || g.updatedAt || g.createdAt || '',
-        group: g,
-      });
-    }
-
-    items.sort((a, b) => {
-      if (a.unread !== b.unread) return a.unread ? -1 : 1;
-      return String(b.sortAt).localeCompare(String(a.sortAt));
-    });
-
-    return items.filter((c) => {
-      if (filter === 'groups' && c.type !== 'group') return false;
-      if (filter === 'unread' && !c.unread) return false;
-      if (q && !(c.title || '').toLowerCase().includes(q)) return false;
-      return true;
-    });
-  }, [users, groups, user.id, search, filter, activityTick]);
-
-  function handleSelectConversation(c) {
-    setSelected(c);
-    setError('');
-    setDraft('');
-    setShowEmojiPicker(false);
+    setSelectedUser(u);
     setSidebarOpen(false);
     markConversationRead(user.id, c.key);
     bumpActivity();
@@ -429,6 +374,47 @@ export default function Chat() {
       envelopes.push({ user: id, ...sealMessage(plaintext, publicKey) });
     }
     return envelopes;
+  }
+
+  function handleHideChat(u) {
+    const peerId = String(u.id);
+    setHiddenChatIds(hideChat(user.id, peerId));
+    if (selectedUser && String(selectedUser.id) === peerId) {
+      setSelectedUser(null);
+      setMessages([]);
+    }
+  }
+
+  function handleBlockUser(u) {
+    setConfirmDialog({
+      type: 'block',
+      user: u,
+      title: `Block ${u.username}?`,
+      message: 'They’ll be removed from your list and you won’t be able to message each other. Chat history is kept.',
+      confirmLabel: 'Block',
+      danger: true,
+    });
+  }
+
+  async function executeBlockUser(u) {
+    try {
+      setConfirmBusy(true);
+      const { data } = await client.post(`/users/${u.id}/block`);
+      updateSessionUser(data.data);
+      setUsers((prev) => prev.filter((peer) => String(peer.id) !== String(u.id)));
+      setHiddenChatIds(hideChat(user.id, u.id));
+      if (selectedUser && String(selectedUser.id) === String(u.id)) {
+        setSelectedUser(null);
+        setMessages([]);
+      }
+      setError('');
+      setConfirmDialog(null);
+    } catch (err) {
+      setError(err.response?.data?.error || 'Failed to block user');
+      setConfirmDialog(null);
+    } finally {
+      setConfirmBusy(false);
+    }
   }
 
   async function handleSend(e) {
@@ -663,17 +649,45 @@ export default function Chat() {
     };
   }, []);
 
-  async function handleDeleteMessage(messageId) {
+  function handleDeleteMessage(messageId) {
     if (!messageId) return;
-    const confirmed = window.confirm(
-      'Delete this message for everyone? It will disappear for all participants with no trace.'
-    );
-    if (!confirmed) return;
+    setConfirmDialog({
+      type: 'delete',
+      messageId,
+      title: 'Delete message?',
+      message: 'This removes the message for everyone. It will disappear for both of you with no trace.',
+      confirmLabel: 'Delete',
+      danger: true,
+    });
+  }
+
+  async function executeDeleteMessage(messageId) {
     try {
+      setConfirmBusy(true);
       await client.delete(`/messages/${messageId}`);
       setMessages((prev) => prev.filter((m) => String(m.id || m._id) !== String(messageId)));
+      setConfirmDialog(null);
     } catch (err) {
       setError(err.response?.data?.error || 'Failed to delete message');
+      setConfirmDialog(null);
+    } finally {
+      setConfirmBusy(false);
+    }
+  }
+
+  function closeConfirmDialog() {
+    if (confirmBusy) return;
+    setConfirmDialog(null);
+  }
+
+  async function handleConfirmDialog() {
+    if (!confirmDialog) return;
+    if (confirmDialog.type === 'block') {
+      await executeBlockUser(confirmDialog.user);
+      return;
+    }
+    if (confirmDialog.type === 'delete') {
+      await executeDeleteMessage(confirmDialog.messageId);
     }
   }
 
@@ -732,21 +746,16 @@ export default function Chat() {
     }
   }
 
-  const title = useMemo(() => {
-    if (!selected) return 'Select a conversation';
-    return selected.title || (selected.type === 'group' ? 'Group' : 'Chat');
-  }, [selected]);
-
-  const headerSubtitle = useMemo(() => {
-    if (!selected) return null;
-    if (selected.type === 'group') {
-      const group = selected.group || groups.find((g) => String(g.id) === String(selected.id));
-      const count = (group?.members || []).length;
-      return count ? `${count} members` : 'Group chat';
-    }
-    const peer = selected.peer || users.find((u) => String(u.id) === String(selected.id));
-    return formatLastSeen(peer?.lastLoginAt);
-  }, [selected, groups, users]);
+  const title = useMemo(() => selectedUser?.username || 'Select a conversation', [selectedUser]);
+  const filteredUsers = useMemo(() => {
+    const q = search.toLowerCase().trim();
+    const hidden = new Set(hiddenChatIds);
+    return users.filter((u) => {
+      const name = u?.username?.toLowerCase() || '';
+      if (q) return name.includes(q);
+      return !hidden.has(String(u.id));
+    });
+  }, [users, search, hiddenChatIds]);
 
   return (
     <div className="chat-page">
@@ -765,12 +774,15 @@ export default function Chat() {
             </div>
             <div className="sidebar-user-info">
               <div className="sidebar-username">{user.username}</div>
-              <div className="sidebar-lastseen">{formatLastSeen(user.lastLoginAt)}</div>
+              <div className="sidebar-lastseen sidebar-status-online">online</div>
             </div>
           </div>
-          <button className="link-button" onClick={logout} aria-label="Log out of application">
-            Log out
-          </button>
+          <div className="sidebar-header-actions">
+            <ThemeToggle />
+            <button className="link-button" onClick={logout} aria-label="Log out of application">
+              Log out
+            </button>
+          </div>
         </div>
         {canChat && (
           <div className="sidebar-search">
@@ -783,13 +795,12 @@ export default function Chat() {
           </div>
         )}
         {canChat ? (
-          <ConversationList
-            conversations={conversations}
-            filter={filter}
-            onFilterChange={setFilter}
-            selectedKey={selected?.key}
-            onSelect={handleSelectConversation}
-            onCreateGroup={() => setShowCreateGroup(true)}
+          <UserList
+            users={filteredUsers}
+            selectedUserId={selectedUser?.id}
+            onSelect={handleSelectUser}
+            onHide={handleHideChat}
+            onBlock={handleBlockUser}
             loading={loadingUsers}
           />
         ) : (
@@ -833,7 +844,11 @@ export default function Chat() {
                 </button>
                 <span>{title}</span>
               </div>
-              {selected && <span className="last-seen-badge">{headerSubtitle}</span>}
+              {selectedUser && (
+                <span className={`last-seen-badge ${isRecentlyActive(selectedUser.lastLoginAt) ? 'status-online' : ''}`}>
+                  {formatLastSeen(selectedUser.lastLoginAt)}
+                </span>
+              )}
             </header>
 
             {!selected ? (
@@ -1015,13 +1030,16 @@ export default function Chat() {
         )}
       </main>
 
-      {showCreateGroup && (
-        <CreateGroupModal
-          users={users}
-          onClose={() => setShowCreateGroup(false)}
-          onCreate={handleCreateGroup}
-        />
-      )}
+      <ConfirmDialog
+        open={Boolean(confirmDialog)}
+        title={confirmDialog?.title}
+        message={confirmDialog?.message}
+        confirmLabel={confirmDialog?.confirmLabel}
+        danger={confirmDialog?.danger}
+        busy={confirmBusy}
+        onCancel={closeConfirmDialog}
+        onConfirm={handleConfirmDialog}
+      />
     </div>
   );
 }

@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext.jsx';
 import { formatKeyFile, downloadKeyFile } from '../crypto/keyFile.js';
+import ThemeToggle from '../components/ThemeToggle.jsx';
 
 export default function Register() {
   const { register } = useAuth();
@@ -36,6 +37,9 @@ export default function Register() {
   if (keySet) {
     return (
       <div className="auth-page">
+        <div className="auth-page-topbar">
+          <ThemeToggle />
+        </div>
         <div className="auth-card">
           <h1>Save your private keys</h1>
           <p className="auth-subtitle">
@@ -64,6 +68,9 @@ export default function Register() {
 
   return (
     <div className="auth-page">
+      <div className="auth-page-topbar">
+        <ThemeToggle />
+      </div>
       <form className="auth-card" onSubmit={handleSubmit}>
         <div className="auth-brand">
           <div className="auth-brand-icon">
@@ -71,6 +78,7 @@ export default function Register() {
               <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
             </svg>
           </div>
+          <div className="auth-brand-name">QuantumChat</div>
           <h1>Create account</h1>
         </div>
 
