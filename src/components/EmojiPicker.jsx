@@ -1,5 +1,5 @@
-import { useRef, useEffect, useCallback } from 'react';
-import { COMPOSER_EMOJIS } from '../utils/emojis.js';
+import { useRef, useEffect, useCallback, useState } from 'react';
+import { COMPOSER_EMOJIS, searchEmojis } from '../utils/emojis.js';
 
 const EMOJI_CATEGORIES = [
   {
@@ -52,8 +52,11 @@ export default function EmojiPicker({ onSelect, onPick, isOpen, onClose }) {
 
   if (!isCurrentlyOpen) return null;
 
-  // Use the curated categorization if available, otherwise fallback to COMPOSER_EMOJIS if imported
-  const emojisToUse = COMPOSER_EMOJIS || EMOJI_CATEGORIES.flatMap(c => c.emojis);
+  // Emoji search state
+  const [query, setQuery] = useState('');
+
+  // Use search results when a query is present, otherwise the full set
+  const emojisToUse = query ? searchEmojis(query).slice(0, 200) : (COMPOSER_EMOJIS || EMOJI_CATEGORIES.flatMap((c) => c.emojis));
 
   return (
     <div className="emoji-picker" ref={panelRef} role="dialog" aria-label="Emoji picker">
@@ -63,15 +66,28 @@ export default function EmojiPicker({ onSelect, onPick, isOpen, onClose }) {
           ×
         </button>
       </div>
-      {COMPOSER_EMOJIS ? (
-        <div className="emoji-picker-grid">
-          {emojisToUse.map((emoji) => (
-            <button key={emoji} type="button" onClick={() => handleEmojiClick(emoji)} aria-label={`Insert ${emoji}`}>
-              {emoji}
-            </button>
-          ))}
-        </div>
-      ) : (
+      <div className="emoji-picker-search-row">
+        <input
+          aria-label="Search emojis"
+          className="emoji-search-input"
+          placeholder="Search emojis (e.g. smile, heart, pizza)"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+        />
+        {query && (
+          <button type="button" className="emoji-search-clear" onClick={() => setQuery('')} aria-label="Clear search">
+            ×
+          </button>
+        )}
+      </div>
+      <div className="emoji-picker-grid">
+        {emojisToUse.map((emoji) => (
+          <button key={emoji} type="button" onClick={() => handleEmojiClick(emoji)} aria-label={`Insert ${emoji}`}>
+            {emoji}
+          </button>
+        ))}
+      </div>
+      {!COMPOSER_EMOJIS && (
         EMOJI_CATEGORIES.map((category) => (
           <div key={category.label} className="emoji-picker-category">
             <span className="emoji-picker-category-label">{category.label}</span>
