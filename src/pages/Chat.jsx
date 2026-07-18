@@ -47,6 +47,8 @@ import {
 import ConversationList from '../components/ConversationList.jsx';
 import CreateGroupModal from '../components/CreateGroupModal.jsx';
 import GroupSettingsModal from '../components/GroupSettingsModal.jsx';
+import UserProfileModal from '../components/UserProfileModal.jsx';
+import UserAvatar from '../components/UserAvatar.jsx';
 import MessageBubble from '../components/MessageBubble.jsx';
 import EmojiPicker from '../components/EmojiPicker.jsx';
 import SidebarMenu from '../components/SidebarMenu.jsx';
@@ -167,6 +169,7 @@ export default function Chat() {
   const [cameraOpen, setCameraOpen] = useState(false);
   const [gallery, setGallery] = useState(null);
   const [showGroupSettings, setShowGroupSettings] = useState(false);
+  const [profileUserId, setProfileUserId] = useState(null);
   const [groupComposerMenu, setGroupComposerMenu] = useState(null);
   const [pollDraft, setPollDraft] = useState(null);
   const [eventDraft, setEventDraft] = useState(null);
@@ -803,6 +806,7 @@ export default function Chat() {
     setMentionOpen(false);
     setPendingAnnouncement(false);
     setShowGroupSettings(false);
+    setProfileUserId(null);
     imageSrcMapRef.current = new Map();
     markConversationRead(user.id, c.key);
     bumpActivity();
@@ -1955,6 +1959,7 @@ export default function Chat() {
       setMessages([]);
     }
     setShowGroupSettings(false);
+    setProfileUserId(null);
   }
 
   const headerOnline = useMemo(() => {
@@ -2052,6 +2057,10 @@ export default function Chat() {
             onArchive={(c) => {
               setArchivedKeys(toggleArchiveChat(user.id, c.key));
             }}
+            onViewProfile={(u) => {
+              const id = u?.id || u?._id;
+              if (id) setProfileUserId(id);
+            }}
             loading={loadingUsers}
             searchQuery={search}
           />
@@ -2121,32 +2130,46 @@ export default function Chat() {
                 </button>
                 {selected ? (
                   <div
-                    className="chat-header-peer"
-                    role={selected.type === 'group' ? 'button' : undefined}
-                    tabIndex={selected.type === 'group' ? 0 : undefined}
-                    onClick={selected.type === 'group' ? () => setShowGroupSettings(true) : undefined}
-                    onKeyDown={
+                    className={`chat-header-peer${selected.type === 'group' || selected.type === 'dm' ? ' clickable' : ''}`}
+                    role={selected.type === 'group' || selected.type === 'dm' ? 'button' : undefined}
+                    tabIndex={selected.type === 'group' || selected.type === 'dm' ? 0 : undefined}
+                    onClick={
                       selected.type === 'group'
+                        ? () => setShowGroupSettings(true)
+                        : selected.type === 'dm'
+                          ? () => setProfileUserId(selected.id)
+                          : undefined
+                    }
+                    onKeyDown={
+                      selected.type === 'group' || selected.type === 'dm'
                         ? (e) => {
                             if (e.key === 'Enter' || e.key === ' ') {
                               e.preventDefault();
-                              setShowGroupSettings(true);
+                              if (selected.type === 'group') setShowGroupSettings(true);
+                              else setProfileUserId(selected.id);
                             }
                           }
                         : undefined
                     }
-                    style={selected.type === 'group' ? { cursor: 'pointer' } : undefined}
+                    title={selected.type === 'dm' ? 'View profile' : selected.type === 'group' ? 'Group settings' : undefined}
                   >
-                    <span className={`avatar ${selected.type === 'group' ? 'group-avatar' : ''} chat-header-avatar`}>
-                      {selected.type === 'group' ? (
+                    {selected.type === 'group' ? (
+                      <span className="avatar group-avatar chat-header-avatar">
                         <Users size={18} strokeWidth={2} aria-hidden="true" />
-                      ) : (
-                        <>
-                          {(title || '?').slice(0, 2).toUpperCase()}
-                          {headerOnline && <span className="online-dot" aria-hidden="true" />}
-                        </>
-                      )}
-                    </span>
+                      </span>
+                    ) : (
+                      <span className="chat-header-avatar-wrap">
+                        <UserAvatar
+                          userId={selected.id}
+                          name={title}
+                          hasAvatar={Boolean(
+                            (selected.peer || users.find((u) => String(u.id) === String(selected.id)))?.hasAvatar
+                          )}
+                          className="chat-header-avatar"
+                        />
+                        {headerOnline && <span className="online-dot" aria-hidden="true" />}
+                      </span>
+                    )}
                     <div className="chat-header-text">
                       <span className="chat-header-title">{title}</span>
                       {headerSubtitle && (
@@ -2173,18 +2196,19 @@ export default function Chat() {
                   </button>
                 )}
                 <button
-                  className="chat-header-btn quantum-ai-toggle"
+                  className={`chat-header-btn quantum-ai-toggle${aiPanelOpen ? ' active' : ''}`}
                   type="button"
                   onClick={() => setAiPanelOpen((open) => !open)}
                   title="Open QuantumAI"
                   aria-label="Open QuantumAI"
+                  aria-pressed={aiPanelOpen}
                 >
-                  <MessageSquare size={18} />
+                  <MessageSquare size={18} strokeWidth={2} aria-hidden="true" />
                   <span>QuantumAI</span>
                 </button>
                 {selected?.type === 'group' && (
                   <button
-                    className="chat-header-btn"
+                    className="chat-header-btn icon-only"
                     onClick={() => setShowGroupSettings(true)}
                     title="Group settings"
                     aria-label="Group settings"
@@ -2194,10 +2218,11 @@ export default function Chat() {
                 )}
                 {selected && (
                   <button
-                    className="chat-header-btn"
+                    className={`chat-header-btn icon-only${searchOpen ? ' active' : ''}`}
                     onClick={() => setSearchOpen(!searchOpen)}
                     title="Search messages (Ctrl+K)"
                     aria-label="Search messages"
+                    aria-pressed={searchOpen}
                   >
                     <Search size={18} strokeWidth={2} aria-hidden="true" />
                   </button>
@@ -2713,6 +2738,38 @@ export default function Chat() {
           onClose={() => setShowGroupSettings(false)}
           onUpdated={mergeUpdatedGroup}
           onLeftOrDeleted={handleLeftOrDeletedGroup}
+        />
+      )}
+
+      {profileUserId && (
+        <UserProfileModal
+          userId={profileUserId}
+          seed={
+            (selected?.type === 'dm' && String(selected.id) === String(profileUserId) && selected.peer) ||
+            users.find((u) => String(u.id) === String(profileUserId)) ||
+            null
+          }
+          online={
+            onlineUserIds.has(String(profileUserId)) &&
+            ((users.find((u) => String(u.id) === String(profileUserId))?.privacy?.online || 'everyone') !==
+              'nobody')
+          }
+          onClose={() => setProfileUserId(null)}
+          onLoaded={(data) => {
+            if (!data?.id) return;
+            setUsers((prev) => {
+              const id = String(data.id);
+              const idx = prev.findIndex((u) => String(u.id) === id);
+              if (idx < 0) return prev;
+              const next = [...prev];
+              next[idx] = { ...next[idx], ...data };
+              return next;
+            });
+            setSelected((cur) => {
+              if (!cur || cur.type !== 'dm' || String(cur.id) !== String(data.id)) return cur;
+              return { ...cur, peer: { ...(cur.peer || {}), ...data }, title: data.displayName || data.username || cur.title };
+            });
+          }}
         />
       )}
 

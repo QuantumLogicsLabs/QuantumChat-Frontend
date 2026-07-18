@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion';
-import { Archive, Ban, BellOff, Users, UserPlus, VolumeX, X } from 'lucide-react';
+import { Archive, Ban, BellOff, CircleUser, Users, UserPlus, VolumeX, X } from 'lucide-react';
 
 function isRecentlyActive(iso) {
   if (!iso) return false;
@@ -36,6 +36,7 @@ export default function ConversationList({
   onBlock,
   onMute,
   onArchive,
+  onViewProfile,
   loading,
   searchQuery = '',
 }) {
@@ -118,8 +119,22 @@ export default function ConversationList({
                 </span>
                 <span className="user-list-lastseen">{c.subtitle || formatShortLastSeen(c.lastLoginAt)}</span>
               </span>
-              {(onHide || onBlock || onMute || onArchive) && (
+              {(onHide || onBlock || onMute || onArchive || onViewProfile) && (
                 <span className="user-list-actions">
+                  {c.type === 'dm' && onViewProfile && (
+                    <button
+                      type="button"
+                      className="user-list-action-btn"
+                      title="View profile"
+                      aria-label={`View profile of ${c.title}`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onViewProfile(c.peer || c);
+                      }}
+                    >
+                      <CircleUser size={16} strokeWidth={2} aria-hidden="true" />
+                    </button>
+                  )}
                   {onMute && (
                     <button
                       type="button"
