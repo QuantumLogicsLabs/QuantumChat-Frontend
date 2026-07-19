@@ -2057,10 +2057,6 @@ export default function Chat() {
             onArchive={(c) => {
               setArchivedKeys(toggleArchiveChat(user.id, c.key));
             }}
-            onViewProfile={(u) => {
-              const id = u?.id || u?._id;
-              if (id) setProfileUserId(id);
-            }}
             loading={loadingUsers}
             searchQuery={search}
           />
@@ -2077,19 +2073,33 @@ export default function Chat() {
         onDrop={canChat && selected && (selected.type === 'dm' || selected.type === 'group') ? handleDrop : undefined}
       >
         {!canChat && (
-          <div className="key-warning">
-            <p>
-              No private keys found on this device. Either you cleared local storage or this is a new device.
-              If you saved a keys.txt backup when you signed up, import it to keep reading your existing
-              messages. Otherwise you can generate a fresh 5-key set, but old messages will stay unreadable.
-            </p>
-            {importError && <div className="auth-error">{importError}</div>}
-            <div className="key-warning-actions">
-              <button onClick={() => keyFileInputRef.current?.click()}>Import keys.txt</button>
-              <input ref={keyFileInputRef} type="file" accept=".txt" hidden onChange={handleImportKeyFile} />
-              <button className="secondary-button" onClick={handleGenerateKeys}>
-                Generate new key & download
-              </button>
+          <div className="key-unlock">
+            <div className="key-unlock-card">
+              <div className="key-unlock-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+                  <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+                </svg>
+              </div>
+              <h2 className="key-unlock-title">Unlock your encryption keys</h2>
+              <p className="key-unlock-copy">
+                Sign-in alone is not enough. Import the <strong>keys.txt</strong> file that was generated
+                for <strong>{user?.username || user?.email || 'this account'}</strong> so messages can be
+                decrypted. Keys from another account will be rejected.
+              </p>
+              {importError && <div className="auth-error">{importError}</div>}
+              <div className="key-unlock-actions">
+                <button type="button" className="key-unlock-primary" onClick={() => keyFileInputRef.current?.click()}>
+                  Import keys.txt for this account
+                </button>
+                <input ref={keyFileInputRef} type="file" accept=".txt,text/plain" hidden onChange={handleImportKeyFile} />
+                <button type="button" className="key-unlock-secondary" onClick={handleGenerateKeys}>
+                  Lost your keys? Generate new set
+                </button>
+              </div>
+              <p className="key-unlock-hint">
+                Generating new keys keeps you chatting, but messages encrypted with your old keys stay unreadable.
+              </p>
             </div>
           </div>
         )}
@@ -2754,6 +2764,25 @@ export default function Chat() {
             ((users.find((u) => String(u.id) === String(profileUserId))?.privacy?.online || 'everyone') !==
               'nobody')
           }
+          muted={isChatMuted(user.id, conversationKeyForUser(profileUserId))}
+          archived={archivedKeys.map(String).includes(String(conversationKeyForUser(profileUserId)))}
+          onMute={() => {
+            const key = conversationKeyForUser(profileUserId);
+            setMutedKeys(toggleMuteChat(user.id, key));
+          }}
+          onArchive={() => {
+            const key = conversationKeyForUser(profileUserId);
+            setArchivedKeys(toggleArchiveChat(user.id, key));
+          }}
+          onHide={(peer) => {
+            handleHideChat(peer);
+            setProfileUserId(null);
+            showToast('Chat hidden', 'success');
+          }}
+          onBlock={(peer) => {
+            setProfileUserId(null);
+            handleBlockUser(peer);
+          }}
           onClose={() => setProfileUserId(null)}
           onLoaded={(data) => {
             if (!data?.id) return;
@@ -2767,7 +2796,11 @@ export default function Chat() {
             });
             setSelected((cur) => {
               if (!cur || cur.type !== 'dm' || String(cur.id) !== String(data.id)) return cur;
-              return { ...cur, peer: { ...(cur.peer || {}), ...data }, title: data.displayName || data.username || cur.title };
+              return {
+                ...cur,
+                peer: { ...(cur.peer || {}), ...data },
+                title: data.displayName || data.username || cur.title,
+              };
             });
           }}
         />

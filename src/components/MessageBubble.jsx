@@ -403,8 +403,8 @@ export default function MessageBubble({
             >
               <MoreHorizontal size={16} strokeWidth={2} aria-hidden="true" />
             </button>
-          </div>
-        </div>
+      </div>
+    </div>
 
         {popover}
 

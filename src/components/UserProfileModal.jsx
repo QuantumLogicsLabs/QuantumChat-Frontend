@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { BadgeCheck, Clock, Lock, Sparkles, X } from 'lucide-react';
+import { Archive, BadgeCheck, Ban, Clock, Lock, Sparkles, VolumeX, X } from 'lucide-react';
 import client from '../api/client.js';
 import UserAvatar from './UserAvatar.jsx';
 
@@ -35,6 +35,12 @@ export default function UserProfileModal({
   userId,
   seed = null,
   online = false,
+  muted = false,
+  archived = false,
+  onMute,
+  onArchive,
+  onHide,
+  onBlock,
   onClose,
   onLoaded,
 }) {
@@ -94,6 +100,7 @@ export default function UserProfileModal({
   const presence = formatPresence(profile, online);
   const keyRotated = formatKeyRotated(profile?.keyRotatedAt);
   const isAi = profile?.systemRole === 'quantum_ai' || profile?.isSystemUser;
+  const showActions = Boolean(profile && (onMute || onArchive || onHide || onBlock) && !isAi);
 
   return (
     <div className="create-group-overlay" role="presentation" onClick={() => onClose?.()}>
@@ -165,6 +172,66 @@ export default function UserProfileModal({
           </div>
         ) : (
           <div className="user-profile-body">
+            {showActions && (
+              <section className="user-profile-section">
+                <h3 className="user-profile-section-title">Chat actions</h3>
+                <div className="user-profile-actions" role="group" aria-label="Chat actions">
+                  {onMute && (
+                    <button
+                      type="button"
+                      className={`user-profile-action-btn${muted ? ' active' : ''}`}
+                      title={muted ? 'Unmute' : 'Mute'}
+                      aria-label={muted ? `Unmute ${displayName}` : `Mute ${displayName}`}
+                      aria-pressed={muted}
+                      onClick={() => onMute(profile)}
+                    >
+                      <VolumeX size={18} strokeWidth={2} aria-hidden="true" />
+                      <span>{muted ? 'Unmute' : 'Mute'}</span>
+                    </button>
+                  )}
+                  {onArchive && (
+                    <button
+                      type="button"
+                      className={`user-profile-action-btn${archived ? ' active' : ''}`}
+                      title={archived ? 'Unarchive' : 'Archive'}
+                      aria-label={
+                        archived ? `Unarchive chat with ${displayName}` : `Archive chat with ${displayName}`
+                      }
+                      aria-pressed={archived}
+                      onClick={() => onArchive(profile)}
+                    >
+                      <Archive size={18} strokeWidth={2} aria-hidden="true" />
+                      <span>{archived ? 'Unarchive' : 'Archive'}</span>
+                    </button>
+                  )}
+                  {onHide && (
+                    <button
+                      type="button"
+                      className="user-profile-action-btn"
+                      title="Hide chat"
+                      aria-label={`Hide chat with ${displayName}`}
+                      onClick={() => onHide(profile)}
+                    >
+                      <X size={18} strokeWidth={2} aria-hidden="true" />
+                      <span>Hide</span>
+                    </button>
+                  )}
+                  {onBlock && (
+                    <button
+                      type="button"
+                      className="user-profile-action-btn danger"
+                      title="Block user"
+                      aria-label={`Block ${displayName}`}
+                      onClick={() => onBlock(profile)}
+                    >
+                      <Ban size={18} strokeWidth={2} aria-hidden="true" />
+                      <span>Block</span>
+                    </button>
+                  )}
+                </div>
+              </section>
+            )}
+
             <section className="user-profile-section">
               <h3 className="user-profile-section-title">About</h3>
               {bio ? (

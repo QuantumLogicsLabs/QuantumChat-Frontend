@@ -32,12 +32,18 @@ export function AuthProvider({ children }) {
     return { user: newUser, keySet };
   }, []);
 
-  // The 5-key pool is fixed at registration — login doesn't touch it. The
-  // keyring generated at register time already has every key this account
-  // will use; there's nothing new to add here.
+  // Private keys never leave the client. Each successful login clears any
+  // cached keyring for this account (and the previous session's user if
+  // different) so Chat always requires importing the keys.txt that belongs
+  // to this specific account — wrong-file imports are rejected by importKeys.
   const login = useCallback(async ({ email, password }) => {
     const { data } = await client.post('/auth/login', { email, password });
     const { token, user: loggedInUser } = data.data;
+    const previous = getStoredUser();
+    if (previous?.id && String(previous.id) !== String(loggedInUser.id)) {
+      clearKeyring(previous.id);
+    }
+    clearKeyring(loggedInUser.id);
     saveSession(token, loggedInUser);
     setUser(loggedInUser);
     connectSocket();

@@ -277,7 +277,7 @@ export default function AttachmentBubble({
       setObjectUrl(url);
       triggerDownload(url, attachment.filename);
       setTimeout(() => URL.revokeObjectURL(url), 60_000);
-      setStatus('idle');
+        setStatus('idle');
     } catch {
       setStatus('error');
     }
@@ -386,12 +386,12 @@ export default function AttachmentBubble({
   }
 
   if (status === 'error' && autoPreview) {
-    return (
-      <div className="attachment-chip">
-        <span className="attachment-filename">
-          <FileIcon className="file-icon" />
-          <span>{attachment.filename}</span>
-        </span>
+  return (
+    <div className="attachment-chip">
+      <span className="attachment-filename">
+        <FileIcon className="file-icon" />
+        <span>{attachment.filename}</span>
+      </span>
         <button type="button" onClick={handleManualOpen}>
           Retry download
         </button>

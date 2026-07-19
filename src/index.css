@@ -3321,7 +3321,7 @@ input:focus-visible,
 }
 
 /* ----------------------------------------------------------------
-   Key warning
+   Key unlock (required after every login)
    ---------------------------------------------------------------- */
 
 .key-warning {
@@ -3357,6 +3357,121 @@ input:focus-visible,
 
 .key-warning button:hover {
   background: var(--warning-text);
+}
+
+.key-unlock {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px 20px;
+  background:
+    radial-gradient(ellipse 70% 50% at 50% 20%, color-mix(in srgb, var(--accent) 12%, transparent), transparent 70%),
+    var(--bg-chat);
+}
+
+.key-unlock-card {
+  width: min(440px, 100%);
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 14px;
+  padding: 28px 26px 24px;
+  background: var(--bg-glass);
+  backdrop-filter: blur(20px) saturate(1.1);
+  -webkit-backdrop-filter: blur(20px) saturate(1.1);
+  border: 1px solid var(--border-glass);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-lg);
+  text-align: center;
+}
+
+.key-unlock-icon {
+  width: 52px;
+  height: 52px;
+  margin: 0 auto;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-md);
+  background: var(--accent-muted);
+  color: var(--accent);
+}
+
+.key-unlock-icon svg {
+  width: 24px;
+  height: 24px;
+}
+
+.key-unlock-title {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 750;
+  letter-spacing: -0.03em;
+  color: var(--text-primary);
+}
+
+.key-unlock-copy {
+  margin: 0;
+  font-size: 0.92rem;
+  line-height: 1.55;
+  color: var(--text-secondary);
+}
+
+.key-unlock-copy strong {
+  color: var(--text-primary);
+  font-weight: 650;
+}
+
+.key-unlock-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.key-unlock-primary,
+.key-unlock-secondary {
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 16px;
+  border-radius: var(--radius-sm);
+  font: inherit;
+  font-size: 0.9rem;
+  font-weight: 650;
+  cursor: pointer;
+  transition:
+    background var(--transition-fast),
+    color var(--transition-fast),
+    border-color var(--transition-fast);
+}
+
+.key-unlock-primary {
+  border: none;
+  background: var(--accent);
+  color: var(--text-inverse);
+}
+
+.key-unlock-primary:hover {
+  filter: brightness(1.05);
+}
+
+.key-unlock-secondary {
+  border: 1px solid var(--border-subtle);
+  background: transparent;
+  color: var(--text-secondary);
+}
+
+.key-unlock-secondary:hover {
+  background: var(--accent-muted);
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+.key-unlock-hint {
+  margin: 0;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: var(--text-muted);
 }
 
 /* ----------------------------------------------------------------
@@ -6266,6 +6381,69 @@ button.message-reply-preview:hover {
   font-size: 0.8rem;
   line-height: 1.4;
   color: var(--text-secondary);
+}
+
+.user-profile-actions {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.user-profile-action-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 68px;
+  padding: 10px 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg-elevated) 75%, transparent);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 0.68rem;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition:
+    background var(--transition-fast),
+    color var(--transition-fast),
+    border-color var(--transition-fast),
+    transform var(--transition-fast);
+}
+
+.user-profile-action-btn:hover {
+  background: var(--accent-muted);
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 32%, transparent);
+}
+
+.user-profile-action-btn.active {
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg-elevated));
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+.user-profile-action-btn.danger:hover {
+  background: color-mix(in srgb, var(--danger, #dc2626) 10%, transparent);
+  color: var(--danger, #dc2626);
+  border-color: color-mix(in srgb, var(--danger, #dc2626) 35%, transparent);
+}
+
+.user-profile-action-btn:active {
+  transform: translateY(1px);
+}
+
+.user-profile-action-btn svg {
+  flex-shrink: 0;
+  opacity: 0.9;
+}
+
+@media (max-width: 420px) {
+  .user-profile-actions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 .attachment-audio {
