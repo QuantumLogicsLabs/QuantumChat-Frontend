@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTheme } from '../context/ThemeContext.jsx';
+import { useAuth } from '../context/AuthContext.jsx';
 import client from '../api/client.js';
+import { getCurrentKeySet, getSessionId } from '../crypto/keyStorage.js';
+import { encryptVaultPayload, decryptVaultPayload } from '../crypto/keyVault.js';
 import UserAvatar, { bustAvatarCache } from './UserAvatar.jsx';
 
 function ToggleRow({ label, hint, checked, onChange, disabled }) {
@@ -35,6 +38,7 @@ export default function SettingsModal({
   onExportChat,
 }) {
   const { theme, toggleTheme } = useTheme();
+  const { importKeys } = useAuth();
   const closeRef = useRef(null);
   const keyInputRef = useRef(null);
   const avatarInputRef = useRef(null);
@@ -58,9 +62,20 @@ export default function SettingsModal({
   const [newPassword, setNewPassword] = useState('');
   const [blocked, setBlocked] = useState([]);
   const [deletePassword, setDeletePassword] = useState('');
+  const [sessions, setSessions] = useState([]);
+  const [vaultPassphrase, setVaultPassphrase] = useState('');
+  const [vaultPassphraseConfirm, setVaultPassphraseConfirm] = useState('');
+  const [vaultHasBackup, setVaultHasBackup] = useState(false);
+  const [blindnessReport, setBlindnessReport] = useState(null);
+  const [blindnessBusy, setBlindnessBusy] = useState(false);
+  const [totpSetup, setTotpSetup] = useState(null);
+  const [totpCode, setTotpCode] = useState('');
+  const [totpPassword, setTotpPassword] = useState('');
+  const [totpBusy, setTotpBusy] = useState(false);
 
   const isDark = theme === 'dark';
   const shownName = user?.displayName || user?.username || 'You';
+  const currentSessionId = getSessionId();
 
   useEffect(() => {
     const prev = document.body.style.overflow;
@@ -82,6 +97,30 @@ export default function SettingsModal({
       .get('/users/me/blocked')
       .then((res) => setBlocked(res.data.data || []))
       .catch(() => setBlocked([]));
+  }, [tab]);
+
+  useEffect(() => {
+    if (tab !== 'security') return;
+    let cancelled = false;
+    client
+      .get('/users/me/sessions')
+      .then((res) => {
+        if (!cancelled) setSessions(res.data.data || []);
+      })
+      .catch(() => {
+        if (!cancelled) setSessions([]);
+      });
+    client
+      .get('/users/me/vault')
+      .then(() => {
+        if (!cancelled) setVaultHasBackup(true);
+      })
+      .catch(() => {
+        if (!cancelled) setVaultHasBackup(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [tab]);
 
   async function handleAvatarChange(e) {
@@ -165,6 +204,156 @@ export default function SettingsModal({
       setOk('Password updated');
     } catch (err) {
       setError(err.response?.data?.error || 'Failed to change password');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function start2faSetup() {
+    setTotpBusy(true);
+    setError('');
+    setOk('');
+    try {
+      const { data } = await client.post('/auth/2fa/setup');
+      setTotpSetup(data.data);
+      setTotpCode('');
+    } catch (err) {
+      setError(err.response?.data?.error || 'Failed to start 2FA setup');
+    } finally {
+      setTotpBusy(false);
+    }
+  }
+
+  async function confirmEnable2fa() {
+    setTotpBusy(true);
+    setError('');
+    setOk('');
+    try {
+      const { data } = await client.post('/auth/2fa/enable', { token: totpCode.trim() });
+      onUserUpdated?.(data.data.user);
+      setTotpSetup(null);
+      setTotpCode('');
+      setOk('Two-factor authentication enabled');
+    } catch (err) {
+      setError(err.response?.data?.error || 'Failed to enable 2FA');
+    } finally {
+      setTotpBusy(false);
+    }
+  }
+
+  async function confirmDisable2fa() {
+    setTotpBusy(true);
+    setError('');
+    setOk('');
+    try {
+      const { data } = await client.post('/auth/2fa/disable', {
+        password: totpPassword,
+        token: totpCode.trim(),
+      });
+      onUserUpdated?.(data.data.user);
+      setTotpPassword('');
+      setTotpCode('');
+      setOk('Two-factor authentication disabled');
+    } catch (err) {
+      setError(err.response?.data?.error || 'Failed to disable 2FA');
+    } finally {
+      setTotpBusy(false);
+    }
+  }
+
+  async function revokeDeviceSession(sessionId) {
+    const isSelf = sessionId && currentSessionId && sessionId === currentSessionId;
+    if (
+      isSelf &&
+      !window.confirm('Revoke this device? You will be signed out here.')
+    ) {
+      return;
+    }
+    setBusy(true);
+    setError('');
+    setOk('');
+    try {
+      await client.delete(`/users/me/sessions/${sessionId}`);
+      if (isSelf) {
+        onLogout?.();
+        return;
+      }
+      setSessions((prev) => prev.filter((s) => s.sessionId !== sessionId));
+      setOk('Device session revoked');
+    } catch (err) {
+      setError(err.response?.data?.error || 'Failed to revoke session');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function loadBlindnessReport() {
+    setBlindnessBusy(true);
+    setError('');
+    try {
+      const { data } = await client.get('/trust/blindness');
+      setBlindnessReport(data.data || null);
+    } catch (err) {
+      setBlindnessReport(null);
+      setError(err.response?.data?.error || 'Failed to load blindness report');
+    } finally {
+      setBlindnessBusy(false);
+    }
+  }
+
+  async function backupToVault() {
+    if (!vaultPassphrase || vaultPassphrase.length < 8) {
+      setError('Vault passphrase must be at least 8 characters');
+      return;
+    }
+    if (vaultPassphrase !== vaultPassphraseConfirm) {
+      setError('Passphrase confirmation does not match');
+      return;
+    }
+    const keySet = getCurrentKeySet(user.id);
+    if (!keySet.length) {
+      setError('No local keys to back up — import or generate keys first');
+      return;
+    }
+    setBusy(true);
+    setError('');
+    setOk('');
+    try {
+      const secretKeysJson = JSON.stringify(keySet.map((k) => k.secretKey));
+      const payload = await encryptVaultPayload(vaultPassphrase, secretKeysJson);
+      await client.put('/users/me/vault', payload);
+      setVaultHasBackup(true);
+      setVaultPassphrase('');
+      setVaultPassphraseConfirm('');
+      setOk('Keys backed up to encrypted vault');
+    } catch (err) {
+      setError(err.response?.data?.error || err.message || 'Vault backup failed');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function restoreFromVault() {
+    if (!vaultPassphrase) {
+      setError('Enter your vault passphrase to restore');
+      return;
+    }
+    setBusy(true);
+    setError('');
+    setOk('');
+    try {
+      const { data } = await client.get('/users/me/vault');
+      const secretKeysJson = await decryptVaultPayload(vaultPassphrase, data.data);
+      const secretKeys = JSON.parse(secretKeysJson);
+      if (!Array.isArray(secretKeys)) {
+        throw new Error('Vault contents are invalid');
+      }
+      importKeys(secretKeys);
+      setVaultPassphrase('');
+      setVaultPassphraseConfirm('');
+      setOk('Keys restored from vault');
+    } catch (err) {
+      setError(err.response?.data?.error || err.message || 'Vault restore failed');
     } finally {
       setBusy(false);
     }
@@ -452,6 +641,186 @@ export default function SettingsModal({
               </div>
 
               <div className="settings-fieldset">
+                <h3 className="settings-section-title">Two-factor authentication</h3>
+                <p className="settings-section-copy">
+                  {user?.totpEnabled
+                    ? 'TOTP is enabled. You will need an authenticator code when signing in.'
+                    : 'Add an authenticator app (Google Authenticator, Authy, etc.) for login.'}
+                </p>
+                {!user?.totpEnabled && !totpSetup && (
+                  <button
+                    type="button"
+                    className="settings-btn primary"
+                    disabled={totpBusy}
+                    onClick={start2faSetup}
+                  >
+                    {totpBusy ? 'Preparing…' : 'Enable 2FA'}
+                  </button>
+                )}
+                {!user?.totpEnabled && totpSetup && (
+                  <>
+                    <p className="settings-section-copy">
+                      Scan this otpauth URL in your authenticator, or enter the secret manually:
+                    </p>
+                    <code className="settings-section-copy" style={{ display: 'block', wordBreak: 'break-all' }}>
+                      {totpSetup.secret}
+                    </code>
+                    <p className="settings-section-copy" style={{ fontSize: 12, opacity: 0.75, wordBreak: 'break-all' }}>
+                      {totpSetup.otpauthUrl}
+                    </p>
+                    <label className="settings-field">
+                      <span>Verification code</span>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        maxLength={6}
+                        value={totpCode}
+                        onChange={(e) => setTotpCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                        placeholder="000000"
+                        autoComplete="one-time-code"
+                      />
+                    </label>
+                    <div className="settings-key-actions">
+                      <button
+                        type="button"
+                        className="settings-btn primary"
+                        disabled={totpBusy || totpCode.length !== 6}
+                        onClick={confirmEnable2fa}
+                      >
+                        Confirm &amp; enable
+                      </button>
+                      <button
+                        type="button"
+                        className="settings-btn ghost"
+                        disabled={totpBusy}
+                        onClick={() => {
+                          setTotpSetup(null);
+                          setTotpCode('');
+                        }}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </>
+                )}
+                {user?.totpEnabled && (
+                  <>
+                    <label className="settings-field">
+                      <span>Password</span>
+                      <input
+                        type="password"
+                        value={totpPassword}
+                        onChange={(e) => setTotpPassword(e.target.value)}
+                        autoComplete="current-password"
+                      />
+                    </label>
+                    <label className="settings-field">
+                      <span>Authenticator code</span>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        maxLength={6}
+                        value={totpCode}
+                        onChange={(e) => setTotpCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                        placeholder="000000"
+                        autoComplete="one-time-code"
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      className="settings-btn ghost"
+                      disabled={totpBusy || !totpPassword || totpCode.length !== 6}
+                      onClick={confirmDisable2fa}
+                    >
+                      Disable 2FA
+                    </button>
+                  </>
+                )}
+              </div>
+
+              <div className="settings-fieldset">
+                <h3 className="settings-section-title">Devices</h3>
+                <p className="settings-section-copy">
+                  Active logins across your devices. Revoking signs that device out conceptually.
+                </p>
+                {sessions.length === 0 ? (
+                  <p className="settings-section-copy">No active device sessions.</p>
+                ) : (
+                  sessions.map((s) => {
+                    const isCurrent = currentSessionId && s.sessionId === currentSessionId;
+                    return (
+                      <div key={s.sessionId} className="settings-row" style={{ cursor: 'default' }}>
+                        <span className="settings-row-left">
+                          <span className="settings-row-label">
+                            {s.label || 'Unknown device'}
+                            {isCurrent ? ' (this device)' : ''}
+                          </span>
+                          <span className="settings-row-hint">
+                            Last seen {s.lastSeenAt ? new Date(s.lastSeenAt).toLocaleString() : '—'}
+                            {s.ip ? ` · ${s.ip}` : ''}
+                          </span>
+                        </span>
+                        <button
+                          type="button"
+                          className="settings-btn ghost"
+                          disabled={busy}
+                          onClick={() => revokeDeviceSession(s.sessionId)}
+                        >
+                          Revoke
+                        </button>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+
+              <div className="settings-fieldset">
+                <h3 className="settings-section-title">Encrypted key vault</h3>
+                <p className="settings-section-copy">
+                  Backup your private keys wrapped with a passphrase. The server only stores ciphertext —
+                  never plaintext keys.
+                  {vaultHasBackup ? ' A vault backup exists for this account.' : ' No vault backup yet.'}
+                </p>
+                <label className="settings-field">
+                  <span>Vault passphrase</span>
+                  <input
+                    type="password"
+                    value={vaultPassphrase}
+                    onChange={(e) => setVaultPassphrase(e.target.value)}
+                    autoComplete="new-password"
+                    placeholder="At least 8 characters"
+                  />
+                </label>
+                <label className="settings-field">
+                  <span>Confirm passphrase</span>
+                  <input
+                    type="password"
+                    value={vaultPassphraseConfirm}
+                    onChange={(e) => setVaultPassphraseConfirm(e.target.value)}
+                    autoComplete="new-password"
+                  />
+                </label>
+                <div className="settings-key-actions">
+                  <button
+                    type="button"
+                    className="settings-btn primary"
+                    disabled={busy || !vaultPassphrase}
+                    onClick={backupToVault}
+                  >
+                    Backup to vault
+                  </button>
+                  <button
+                    type="button"
+                    className="settings-btn ghost"
+                    disabled={busy || !vaultPassphrase}
+                    onClick={restoreFromVault}
+                  >
+                    Restore from vault
+                  </button>
+                </div>
+              </div>
+
+              <div className="settings-fieldset">
                 <h3 className="settings-section-title">Encryption keys</h3>
                 <p className="settings-section-copy">
                   Keys stay on this device. Import a backup to recover old messages, or generate a new set if keys are gone.
@@ -465,6 +834,36 @@ export default function SettingsModal({
                     Generate new keys
                   </button>
                 </div>
+              </div>
+
+              <div className="settings-fieldset">
+                <h3 className="settings-section-title">Trust</h3>
+                <p className="settings-section-copy">
+                  The server relays sealed ciphertext and never holds message plaintext.
+                </p>
+                <button
+                  type="button"
+                  className="settings-btn ghost"
+                  disabled={blindnessBusy}
+                  onClick={loadBlindnessReport}
+                >
+                  {blindnessBusy ? 'Loading…' : 'View server blindness report'}
+                </button>
+                {blindnessReport && (
+                  <div className="settings-section-copy" style={{ marginTop: '0.75rem' }}>
+                    <p>
+                      Ciphertexts relayed: <strong>{blindnessReport.ciphertextsRelayed}</strong>
+                    </p>
+                    <p>
+                      Plaintext held: <strong>{blindnessReport.plaintextHeld}</strong>
+                    </p>
+                    <p>
+                      Searchable message index:{' '}
+                      <strong>{blindnessReport.searchableMessageIndex ? 'yes' : 'no'}</strong>
+                    </p>
+                    {blindnessReport.note ? <p>{blindnessReport.note}</p> : null}
+                  </div>
+                )}
               </div>
             </section>
           )}

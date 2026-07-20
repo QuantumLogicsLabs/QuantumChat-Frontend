@@ -1,12 +1,11 @@
 /**
  * MessageSearch.jsx
- * 
- * A search bar component for filtering messages within a conversation.
- * Renders a search input with a dropdown of matching results.
- * Supports case-insensitive text matching, keyboard navigation (Escape to close),
- * and clicking a result to jump to that message.
+ *
+ * On-device search over decrypted message texts (inverted index + TF scoring).
+ * The server never sees the query or plaintext.
  */
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { buildIndex, searchIndex } from '../utils/localSearchIndex.js';
 
 /**
  * Formats a timestamp for display in search results.
@@ -37,7 +36,7 @@ function truncateText(text, maxLength = 80) {
 
 /**
  * MessageSearch component
- * 
+ *
  * @param {Object}   props
  * @param {Array}    props.messages       - Array of message objects with { id, text, timestamp }
  * @param {function} props.onResultSelect - Callback invoked with the message ID when a result is clicked
@@ -48,23 +47,14 @@ function MessageSearch({ messages = [], onResultSelect, isOpen, onClose }) {
   const [query, setQuery] = useState('');
   const inputRef = useRef(null);
 
-  /**
-   * Auto-focus the input when the search bar opens.
-   * Clear the query when it closes.
-   */
   useEffect(() => {
     if (isOpen) {
-      // Small delay to ensure the element is rendered before focusing
       const timer = setTimeout(() => inputRef.current?.focus(), 50);
       return () => clearTimeout(timer);
-    } else {
-      setQuery('');
     }
+    setQuery('');
   }, [isOpen]);
 
-  /**
-   * Handle Escape key to close the search bar.
-   */
   const handleKeyDown = useCallback(
     (event) => {
       if (event.key === 'Escape') {
@@ -74,29 +64,19 @@ function MessageSearch({ messages = [], onResultSelect, isOpen, onClose }) {
     [onClose]
   );
 
-  // Bind keyboard listener when open
   useEffect(() => {
     if (!isOpen) return;
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, [isOpen, handleKeyDown]);
 
-  /**
-   * Filter messages by the search query (case-insensitive).
-   * Only compute when query or messages change.
-   */
+  const index = useMemo(() => buildIndex(messages), [messages]);
+
   const results = useMemo(() => {
     if (!query.trim()) return [];
+    return searchIndex(index, query);
+  }, [query, index]);
 
-    const lowerQuery = query.toLowerCase();
-    return messages.filter(
-      (msg) => msg.text && msg.text.toLowerCase().includes(lowerQuery)
-    );
-  }, [query, messages]);
-
-  /**
-   * Handle clicking a search result — notify parent and close search.
-   */
   const handleResultClick = useCallback(
     (messageId) => {
       onResultSelect(messageId);
@@ -105,14 +85,11 @@ function MessageSearch({ messages = [], onResultSelect, isOpen, onClose }) {
     [onResultSelect, onClose]
   );
 
-  // Don't render anything when closed
   if (!isOpen) return null;
 
   return (
     <div className="message-search" role="search" aria-label="Search messages">
-      {/* Search input */}
       <div className="message-search-input-wrapper">
-        {/* Search icon */}
         <svg
           className="message-search-icon"
           xmlns="http://www.w3.org/2000/svg"
@@ -140,7 +117,6 @@ function MessageSearch({ messages = [], onResultSelect, isOpen, onClose }) {
           aria-label="Search messages input"
         />
 
-        {/* Close button */}
         <button
           className="message-search-close"
           onClick={onClose}
@@ -151,7 +127,8 @@ function MessageSearch({ messages = [], onResultSelect, isOpen, onClose }) {
         </button>
       </div>
 
-      {/* Search results dropdown */}
+      <p className="message-search-hint">On-device index · server never sees this query</p>
+
       {query.trim() && (
         <div className="message-search-results" role="listbox" aria-label="Search results">
           {results.length === 0 ? (
@@ -166,16 +143,9 @@ function MessageSearch({ messages = [], onResultSelect, isOpen, onClose }) {
                 role="option"
                 aria-label={`Go to message: ${truncateText(msg.text, 40)}`}
               >
-                {/* Message text snippet */}
-                <span className="message-search-item-text">
-                  {truncateText(msg.text)}
-                </span>
-
-                {/* Message timestamp */}
+                <span className="message-search-item-text">{truncateText(msg.text)}</span>
                 {msg.timestamp && (
-                  <span className="message-search-item-time">
-                    {formatTimestamp(msg.timestamp)}
-                  </span>
+                  <span className="message-search-item-time">{formatTimestamp(msg.timestamp)}</span>
                 )}
               </button>
             ))

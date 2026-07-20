@@ -1,6 +1,7 @@
 const KEYRING_PREFIX = 'qc_keyring_';
 const TOKEN_KEY = 'qc_token';
 const USER_KEY = 'qc_user';
+const SESSION_ID_KEY = 'qc_session_id';
 
 // Each user's keyring is an append-only list of every X25519 keypair this
 // device has ever held for them: [{ publicKey, secretKey, createdAt }, ...].
@@ -66,13 +67,20 @@ export function clearKeyring(userId) {
   localStorage.removeItem(keyringKey(userId));
 }
 
-export function saveSession(token, user) {
+export function saveSession(token, user, sessionId) {
   localStorage.setItem(TOKEN_KEY, token);
   localStorage.setItem(USER_KEY, JSON.stringify(user));
+  if (sessionId) {
+    localStorage.setItem(SESSION_ID_KEY, sessionId);
+  }
 }
 
 export function getToken() {
   return localStorage.getItem(TOKEN_KEY);
+}
+
+export function getSessionId() {
+  return localStorage.getItem(SESSION_ID_KEY);
 }
 
 export function getStoredUser() {
@@ -94,4 +102,5 @@ export function getStoredUser() {
 export function clearSession() {
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(USER_KEY);
+  localStorage.removeItem(SESSION_ID_KEY);
 }

@@ -21,7 +21,9 @@ export default function ForwardModal({ conversations = [], onClose, onForward, b
             <X size={16} />
           </button>
         </div>
-        <p className="forward-modal-copy">Choose a contact. The message is re-encrypted for them.</p>
+        <p className="forward-modal-copy">
+          Choose a contact. The message is re-encrypted for them. Forwarding may be blocked if the sender disabled it.
+        </p>
         <div className="forward-search">
           <Search size={16} aria-hidden="true" />
           <input

@@ -1,10 +1,63 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import client from '../api/client.js';
 import { getToken } from '../crypto/keyStorage.js';
+import { getSocket } from '../api/socket.js';
 import UserAvatar from './UserAvatar.jsx';
 
 const MAX_STORY_SECONDS = 60;
 const API_BASE = `${import.meta.env.VITE_API_URL || 'http://localhost:5000'}/api`;
+
+function storyKeyStorageKey(storyId) {
+  return `qc_story_keys_${storyId}`;
+}
+
+function bytesToBase64(bytes) {
+  let s = '';
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    s += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  }
+  return btoa(s);
+}
+
+function base64ToBytes(b64) {
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i += 1) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+async function aesGcmEncryptBlob(file) {
+  const key = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, true, [
+    'encrypt',
+    'decrypt',
+  ]);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const plain = new Uint8Array(await file.arrayBuffer());
+  const cipherBuf = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, plain);
+  const rawKey = new Uint8Array(await crypto.subtle.exportKey('raw', key));
+  return {
+    cipherBytes: new Uint8Array(cipherBuf),
+    keyB64: bytesToBase64(rawKey),
+    ivB64: bytesToBase64(iv),
+  };
+}
+
+async function aesGcmDecryptBytes(cipherBytes, keyB64, ivB64) {
+  const key = await crypto.subtle.importKey(
+    'raw',
+    base64ToBytes(keyB64),
+    { name: 'AES-GCM' },
+    false,
+    ['decrypt']
+  );
+  const plain = await crypto.subtle.decrypt(
+    { name: 'AES-GCM', iv: base64ToBytes(ivB64) },
+    key,
+    cipherBytes
+  );
+  return new Uint8Array(plain);
+}
 
 function probeMediaDuration(file) {
   return new Promise((resolve, reject) => {
@@ -69,6 +122,29 @@ export default function StoriesRail({ currentUser, onError }) {
     return () => clearInterval(id);
   }, []);
 
+  useEffect(() => {
+    const socket = getSocket();
+    if (!socket) return undefined;
+    function onDeleted(payload) {
+      const id = String(payload?.id || '');
+      if (!id) return;
+      try {
+        localStorage.removeItem(storyKeyStorageKey(id));
+      } catch {
+        // ignore
+      }
+      setStories((prev) => prev.filter((s) => String(s.id) !== id));
+      setViewer((v) => {
+        if (!v) return v;
+        const items = v.group.items.filter((s) => String(s.id) !== id);
+        if (!items.length) return null;
+        return { ...v, group: { ...v.group, items }, index: Math.min(v.index, items.length - 1) };
+      });
+    }
+    socket.on('story:deleted', onDeleted);
+    return () => socket.off('story:deleted', onDeleted);
+  }, []);
+
   async function handleFile(e) {
     const file = e.target.files?.[0];
     e.target.value = '';
@@ -83,10 +159,45 @@ export default function StoriesRail({ currentUser, onError }) {
           return;
         }
       }
+
       const form = new FormData();
-      form.append('file', file);
+      let pendingKey = null;
+      const canSeal = typeof crypto !== 'undefined' && crypto.subtle;
+
+      if (canSeal) {
+        const sealed = await aesGcmEncryptBlob(file);
+        // Keep original mimetype so upload middleware accepts the ciphertext blob.
+        form.append(
+          'file',
+          new Blob([sealed.cipherBytes], {
+            type: file.type || 'application/octet-stream',
+          }),
+          file.name || 'story.bin'
+        );
+        form.append('sealed', 'true');
+        form.append('mimetype', file.type || 'application/octet-stream');
+        if (file.type.startsWith('image/')) form.append('mediaType', 'image');
+        else if (file.type.startsWith('video/')) form.append('mediaType', 'video');
+        else if (file.type.startsWith('audio/')) form.append('mediaType', 'audio');
+        form.append('envelopeNonce', sealed.ivB64);
+        pendingKey = { keyB64: sealed.keyB64, ivB64: sealed.ivB64 };
+      } else {
+        form.append('file', file);
+      }
       form.append('durationMs', String(durationMs));
-      await client.post('/stories', form);
+
+      const { data } = await client.post('/stories', form);
+      const story = data.data;
+      if (pendingKey && story?.id) {
+        try {
+          localStorage.setItem(
+            storyKeyStorageKey(story.id),
+            JSON.stringify(pendingKey)
+          );
+        } catch {
+          // storage full / private mode
+        }
+      }
       await loadStories();
     } catch (err) {
       onError?.(err.response?.data?.error || err.message || 'Failed to upload story');
@@ -97,6 +208,9 @@ export default function StoriesRail({ currentUser, onError }) {
 
   return (
     <div className="stories-rail">
+      <p className="stories-privacy-note">
+        Sealed stories decrypt only on this device. Peers see them as unavailable. Use chat for sealed media fan-out.
+      </p>
       <button
         type="button"
         className="story-ring add"
@@ -159,13 +273,46 @@ export default function StoriesRail({ currentUser, onError }) {
 function StoryViewer({ group, startIndex, currentUserId, onClose, onDeleted }) {
   const [index, setIndex] = useState(startIndex || 0);
   const [mediaUrl, setMediaUrl] = useState(null);
+  const [sealedBlocked, setSealedBlocked] = useState(false);
   const story = group.items[index];
+  const isOwn = String(group.user?.id) === String(currentUserId);
 
   useEffect(() => {
     let cancelled = false;
     let objectUrl;
     setMediaUrl(null);
+    setSealedBlocked(false);
+
     (async () => {
+      if (story.sealed && !isOwn) {
+        setSealedBlocked(true);
+        return;
+      }
+
+      if (story.sealed && isOwn) {
+        let stored;
+        try {
+          stored = JSON.parse(localStorage.getItem(storyKeyStorageKey(story.id)) || 'null');
+        } catch {
+          stored = null;
+        }
+        if (!stored?.keyB64 || !stored?.ivB64) {
+          setSealedBlocked(true);
+          return;
+        }
+        const token = getToken();
+        const res = await fetch(`${API_BASE}/stories/${story.id}/media`, {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        });
+        if (!res.ok) throw new Error('Failed to load story media');
+        const cipherBytes = new Uint8Array(await res.arrayBuffer());
+        const plain = await aesGcmDecryptBytes(cipherBytes, stored.keyB64, stored.ivB64);
+        if (cancelled) return;
+        objectUrl = URL.createObjectURL(new Blob([plain], { type: story.mimetype || 'application/octet-stream' }));
+        setMediaUrl(objectUrl);
+        return;
+      }
+
       const token = getToken();
       const res = await fetch(`${API_BASE}/stories/${story.id}/media`, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
@@ -176,13 +323,16 @@ function StoryViewer({ group, startIndex, currentUserId, onClose, onDeleted }) {
       objectUrl = URL.createObjectURL(blob);
       setMediaUrl(objectUrl);
     })().catch(() => {
-      if (!cancelled) setMediaUrl(null);
+      if (!cancelled) {
+        setMediaUrl(null);
+        if (story.sealed) setSealedBlocked(true);
+      }
     });
     return () => {
       cancelled = true;
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [story?.id]);
+  }, [story?.id, story?.sealed, story?.mimetype, isOwn]);
 
   useEffect(() => {
     function onKey(e) {
@@ -197,6 +347,11 @@ function StoryViewer({ group, startIndex, currentUserId, onClose, onDeleted }) {
   async function handleDelete() {
     if (!window.confirm('Delete this story?')) return;
     await client.delete(`/stories/${story.id}`);
+    try {
+      localStorage.removeItem(storyKeyStorageKey(story.id));
+    } catch {
+      // ignore
+    }
     onDeleted?.();
   }
 
@@ -212,6 +367,7 @@ function StoryViewer({ group, startIndex, currentUserId, onClose, onDeleted }) {
               size="sm"
             />
             <span>{group.user?.username}</span>
+            {story.sealed ? <span className="story-sealed-badge">Sealed</span> : null}
           </div>
           <button type="button" className="create-group-close" onClick={onClose} aria-label="Close">
             ×
@@ -226,14 +382,17 @@ function StoryViewer({ group, startIndex, currentUserId, onClose, onDeleted }) {
           className="story-viewer-media"
           onClick={() => setIndex((i) => (i < group.items.length - 1 ? i + 1 : (onClose(), i)))}
         >
-          {!mediaUrl && <p className="empty-hint">Loading…</p>}
+          {sealedBlocked && (
+            <p className="empty-hint">Sealed story — unavailable on this build</p>
+          )}
+          {!sealedBlocked && !mediaUrl && <p className="empty-hint">Loading…</p>}
           {mediaUrl && story.mediaType === 'image' && <img src={mediaUrl} alt="" />}
           {mediaUrl && story.mediaType === 'video' && <video src={mediaUrl} autoPlay controls />}
           {mediaUrl && story.mediaType === 'audio' && <audio src={mediaUrl} autoPlay controls />}
         </div>
         {story.caption && <p className="story-caption">{story.caption}</p>}
         <div className="story-viewer-actions">
-          {String(group.user?.id) === String(currentUserId) && (
+          {isOwn && (
             <button type="button" className="confirm-btn danger" onClick={handleDelete}>
               Delete
             </button>

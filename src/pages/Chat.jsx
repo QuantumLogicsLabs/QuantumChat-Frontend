@@ -11,12 +11,14 @@ import {
   Mic,
   Paperclip,
   Pin,
+  Phone,
   Search,
   Send,
   Settings2,
   Smile,
   Square,
   Users,
+  Video,
   X,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.jsx';
@@ -28,6 +30,7 @@ import { formatKeyFile, downloadKeyFile, parseKeyFile } from '../crypto/keyFile.
 import { getCurrentKeySet, findSecretKeyForPublicKey } from '../crypto/keyStorage.js';
 import { normalizeAttachment, pickRecorderMimeType, attachmentIdOf } from '../crypto/voiceCache.js';
 import { playReceiveSound, playSendSound } from '../utils/sounds.js';
+import { enablePushNotifications } from '../utils/pushNotifications.js';
 import {
   conversationKeyForGroup,
   conversationKeyForUser,
@@ -64,6 +67,8 @@ import ForwardModal from '../components/ForwardModal.jsx';
 import CameraCapture from '../components/CameraCapture.jsx';
 import ImageLightbox from '../components/ImageLightbox.jsx';
 import AIAssistantPanel from '../components/AIAssistantPanel.jsx';
+import CallOverlay from '../components/CallOverlay.jsx';
+import useWebRTCCall from '../hooks/useWebRTCCall.js';
 import { useToast } from '../components/ToastProvider.jsx';
 import { getHiddenChatIds, hideChat, unhideChat } from '../utils/hiddenChats.js';
 import {
@@ -122,6 +127,10 @@ function isSameDay(d1, d2) {
 export default function Chat() {
   const { user, logout, regenerateKeys, importKeys, hasLocalKeyring, updateSessionUser } = useAuth();
   const { showToast } = useToast();
+  const webrtc = useWebRTCCall({
+    userId: user?.id,
+    onMissed: () => showToast('Call ended or declined', 'info'),
+  });
 
   const [users, setUsers] = useState([]);
   const [groups, setGroups] = useState([]);
@@ -156,6 +165,7 @@ export default function Chat() {
   const [isDragging, setIsDragging] = useState(false);
   const [logoutConfirmOpen, setLogoutConfirmOpen] = useState(false);
   const [peerTyping, setPeerTyping] = useState(false);
+  const [groupTypingNames, setGroupTypingNames] = useState([]);
   const [onlineUserIds, setOnlineUserIds] = useState(() => new Set());
   const [deletedForMeIds, setDeletedForMeIds] = useState(() => getDeletedForMeIds(user?.id));
   const [starredIds, setStarredIds] = useState(() => getStarredIds(user?.id));
@@ -167,6 +177,9 @@ export default function Chat() {
   const [extrasTick, setExtrasTick] = useState(0);
   const [uploads, setUploads] = useState([]);
   const [cameraOpen, setCameraOpen] = useState(false);
+  const [disappearSeconds, setDisappearSeconds] = useState(0);
+  const [allowForward, setAllowForward] = useState(true);
+  const [forwardUntilSeconds, setForwardUntilSeconds] = useState(0);
   const [gallery, setGallery] = useState(null);
   const [showGroupSettings, setShowGroupSettings] = useState(false);
   const [profileUserId, setProfileUserId] = useState(null);
@@ -420,6 +433,12 @@ export default function Chat() {
       setMessages((prev) => prev.filter((m) => String(m.id || m._id) !== id));
     }
 
+    function handleExpired(payload) {
+      const id = String(payload?.id || '');
+      if (!id) return;
+      setMessages((prev) => prev.filter((m) => String(m.id || m._id) !== id));
+    }
+
     function handleReaction(raw) {
       const id = String(raw?.id || raw?._id || '');
       if (!id) return;
@@ -499,18 +518,36 @@ export default function Chat() {
       showToast(`${username || 'Someone'} mentioned you`);
     }
 
-    function handleTypingStart({ from } = {}) {
+    function handleTypingStart({ from, groupId } = {}) {
       const current = selectedRef.current;
-      if (!current || current.type !== 'dm') return;
+      if (!current) return;
+      if (groupId && current.type === 'group' && String(groupId) === String(current.id)) {
+        if (String(from) === String(user.id)) return;
+        const name =
+          users.find((u) => String(u.id) === String(from))?.username ||
+          (current.group?.members || []).find((m) => String(m.id || m._id) === String(from))?.username ||
+          'Someone';
+        setGroupTypingNames((prev) => (prev.includes(name) ? prev : [...prev, name].slice(-3)));
+        clearTimeout(typingPeerTimeoutRef.current);
+        typingPeerTimeoutRef.current = setTimeout(() => setGroupTypingNames([]), 3000);
+        return;
+      }
+      if (current.type !== 'dm') return;
       if (String(from) !== String(current.id)) return;
       setPeerTyping(true);
       clearTimeout(typingPeerTimeoutRef.current);
       typingPeerTimeoutRef.current = setTimeout(() => setPeerTyping(false), 3000);
     }
 
-    function handleTypingStop({ from } = {}) {
+    function handleTypingStop({ from, groupId } = {}) {
       const current = selectedRef.current;
-      if (!current || current.type !== 'dm') return;
+      if (!current) return;
+      if (groupId && current.type === 'group' && String(groupId) === String(current.id)) {
+        const name = users.find((u) => String(u.id) === String(from))?.username;
+        if (name) setGroupTypingNames((prev) => prev.filter((n) => n !== name));
+        return;
+      }
+      if (current.type !== 'dm') return;
       if (String(from) !== String(current.id)) return;
       setPeerTyping(false);
     }
@@ -568,6 +605,7 @@ export default function Chat() {
 
     socket.on('message:new', handleIncoming);
     socket.on('message:deleted', handleDeleted);
+    socket.on('message:expired', handleExpired);
     socket.on('message:reaction', handleReaction);
     socket.on('message:edited', handleEdited);
     socket.on('group:new', handleGroupNew);
@@ -583,6 +621,7 @@ export default function Chat() {
     return () => {
       socket.off('message:new', handleIncoming);
       socket.off('message:deleted', handleDeleted);
+      socket.off('message:expired', handleExpired);
       socket.off('message:reaction', handleReaction);
       socket.off('message:edited', handleEdited);
       socket.off('group:new', handleGroupNew);
@@ -602,6 +641,7 @@ export default function Chat() {
   useEffect(() => {
     if (!selected || !hasLocalKeyring) return undefined;
 
+    setDisappearSeconds(0);
     let cancelled = false;
     setPeerTyping(false);
     setHasMoreMessages(false);
@@ -691,6 +731,11 @@ export default function Chat() {
 
   const canChat = hasLocalKeyring;
   const isGroupChat = selected?.type === 'group';
+
+  useEffect(() => {
+    if (!canChat) return;
+    enablePushNotifications().catch(() => {});
+  }, [canChat]);
 
   const usernameById = useMemo(() => {
     const map = new Map();
@@ -807,9 +852,15 @@ export default function Chat() {
     setPendingAnnouncement(false);
     setShowGroupSettings(false);
     setProfileUserId(null);
+    setPeerTyping(false);
+    setGroupTypingNames([]);
     imageSrcMapRef.current = new Map();
     markConversationRead(user.id, c.key);
     bumpActivity();
+    const socket = getSocket();
+    if (socket && c.type === 'group') {
+      socket.emit('group:join', { groupId: c.id });
+    }
   }
 
   async function handleCreateGroup({ name, memberIds }) {
@@ -849,6 +900,15 @@ export default function Chat() {
     return envelopes;
   }
 
+  function buildForwardPolicy() {
+    if (allowForward && forwardUntilSeconds <= 0) return undefined;
+    const policy = { allowForward };
+    if (allowForward && forwardUntilSeconds > 0) {
+      policy.forwardUntil = new Date(Date.now() + forwardUntilSeconds * 1000).toISOString();
+    }
+    return policy;
+  }
+
   async function sendGroupPayload(plaintext, { kind, mentionedUserIds } = {}) {
     if (!selected || selected.type !== 'group') {
       throw new Error('No group selected');
@@ -861,6 +921,9 @@ export default function Chat() {
     const payload = { envelopes, kind: kind || 'text' };
     if (mentionedUserIds?.length) payload.mentionedUserIds = mentionedUserIds;
     if (replyTo) payload.replyTo = replyTo.id || replyTo._id;
+    if (disappearSeconds > 0) payload.expiresInSeconds = disappearSeconds;
+    const forwardPolicy = buildForwardPolicy();
+    if (forwardPolicy) payload.forwardPolicy = forwardPolicy;
     const { data } = await client.post(`/groups/${selected.id}/messages`, payload);
     recordActivityFromMessage(data.data);
     setMessages((prev) => {
@@ -978,15 +1041,23 @@ export default function Chat() {
       setMentionQuery('');
     }
 
-    if (!selected || selected.type !== 'dm' || selected.peer?.isSystemUser) return;
+    if (!selected || selected.peer?.isSystemUser) return;
     const socket = getSocket();
     if (!socket) return;
 
-    socket.emit('typing:start', { to: selected.id });
-    clearTimeout(typingTimeoutRef.current);
-    typingTimeoutRef.current = setTimeout(() => {
-      socket.emit('typing:stop', { to: selected.id });
-    }, 2000);
+    if (selected.type === 'dm') {
+      socket.emit('typing:start', { to: selected.id });
+      clearTimeout(typingTimeoutRef.current);
+      typingTimeoutRef.current = setTimeout(() => {
+        socket.emit('typing:stop', { to: selected.id });
+      }, 2000);
+    } else if (selected.type === 'group') {
+      socket.emit('typing:start', { groupId: selected.id });
+      clearTimeout(typingTimeoutRef.current);
+      typingTimeoutRef.current = setTimeout(() => {
+        socket.emit('typing:stop', { groupId: selected.id });
+      }, 2000);
+    }
   }
 
   function insertMention(username) {
@@ -1243,6 +1314,9 @@ export default function Chat() {
         const forSender = sealMessage(draft, myKey.publicKey);
         const body = { to: selected.id, forRecipient, forSender };
         if (replyTo) body.replyTo = replyTo.id || replyTo._id;
+        if (disappearSeconds > 0) body.expiresInSeconds = disappearSeconds;
+        const forwardPolicy = buildForwardPolicy();
+        if (forwardPolicy) body.forwardPolicy = forwardPolicy;
         const { data } = await client.post('/messages', body);
         recordActivityFromMessage(data.data);
         setMessages((prev) => {
@@ -1356,12 +1430,16 @@ export default function Chat() {
 
       const forRecipient = sealMessage('', recipientPublicKey);
       const forSender = sealMessage('', myKey.publicKey);
-      const { data } = await client.post('/messages', {
+      const msgBody = {
         to: selected.id,
         forRecipient,
         forSender,
         attachmentId,
-      });
+      };
+      if (disappearSeconds > 0) msgBody.expiresInSeconds = disappearSeconds;
+      const forwardPolicy = buildForwardPolicy();
+      if (forwardPolicy) msgBody.forwardPolicy = forwardPolicy;
+      const { data } = await client.post('/messages', msgBody);
       recordActivityFromMessage(data.data);
       setMessages((prev) => {
         const id = String(data.data.id || data.data._id);
@@ -1699,6 +1777,27 @@ export default function Chat() {
     if (!forwardMessage?.text || !target || target.type !== 'dm') return;
     setForwardBusy(true);
     try {
+      const originalId = forwardMessage.id || forwardMessage._id;
+      if (originalId) {
+        try {
+          const check = await client.get(`/messages/${originalId}/forward-check`);
+          if (check.data?.data?.allowed === false) {
+            showToast(check.data.data.reason || 'Forwarding not allowed for this message', 'error');
+            return;
+          }
+        } catch (checkErr) {
+          const reason =
+            checkErr.response?.data?.data?.reason ||
+            checkErr.response?.data?.error ||
+            'Forwarding not allowed for this message';
+          if (checkErr.response?.status === 403 || checkErr.response?.status === 404) {
+            showToast(reason, 'error');
+            return;
+          }
+          // Network / unexpected: still attempt send; server will enforce.
+        }
+      }
+
       const peer = target.peer || users.find((u) => String(u.id) === String(target.id));
       const myKey = pickRandom(getCurrentKeySet(user.id));
       const recipientKeys = (peer?.publicKeys || []).filter(Boolean);
@@ -1714,7 +1813,7 @@ export default function Chat() {
         forSender,
         forwardedFrom: {
           username: user.username,
-          messageId: forwardMessage.id || forwardMessage._id,
+          messageId: originalId,
         },
       });
       if (selected?.key === target.key) {
@@ -1860,6 +1959,11 @@ export default function Chat() {
   const headerSubtitle = useMemo(() => {
     if (!selected) return null;
     if (selected.type === 'group') {
+      if (groupTypingNames.length) {
+        return groupTypingNames.length === 1
+          ? `${groupTypingNames[0]} is typing…`
+          : `${groupTypingNames.slice(0, 2).join(', ')} typing…`;
+      }
       const group = selected.group || groups.find((g) => String(g.id) === String(selected.id));
       const desc = (group?.description || '').trim();
       if (desc) return desc.length > 72 ? `${desc.slice(0, 72)}…` : desc;
@@ -1869,10 +1973,10 @@ export default function Chat() {
     const peer = selected.peer || users.find((u) => String(u.id) === String(selected.id));
     if (peer?.systemRole === 'quantum_ai') return aiBusy ? 'generating…' : 'AI Assistant';
     const onlineAllowed = (peer?.privacy?.online || 'everyone') !== 'nobody';
-    if (onlineAllowed && onlineUserIds.has(String(selected.id))) return 'online';
     if (peerTyping) return 'typing…';
+    if (onlineAllowed && onlineUserIds.has(String(selected.id))) return 'online';
     return formatLastSeen(peer?.lastLoginAt);
-  }, [selected, groups, users, onlineUserIds, peerTyping, aiBusy]);
+  }, [selected, groups, users, onlineUserIds, peerTyping, groupTypingNames, aiBusy]);
 
   const activeGroup = useMemo(() => {
     if (!selected || selected.type !== 'group') return null;
@@ -2194,6 +2298,40 @@ export default function Chat() {
                 )}
               </div>
               <div className="chat-header-actions">
+                {selected?.type === 'dm' && !selected?.peer?.isSystemUser && selected?.peer?.systemRole !== 'quantum_ai' && (
+                  <>
+                    <button
+                      className="chat-header-btn icon-only"
+                      type="button"
+                      title="Voice call"
+                      aria-label="Voice call"
+                      onClick={() =>
+                        webrtc.startCall({
+                          peerId: selected.id,
+                          peerName: title,
+                          video: false,
+                        })
+                      }
+                    >
+                      <Phone size={18} strokeWidth={2} aria-hidden="true" />
+                    </button>
+                    <button
+                      className="chat-header-btn icon-only"
+                      type="button"
+                      title="Video call"
+                      aria-label="Video call"
+                      onClick={() =>
+                        webrtc.startCall({
+                          peerId: selected.id,
+                          peerName: title,
+                          video: true,
+                        })
+                      }
+                    >
+                      <Video size={18} strokeWidth={2} aria-hidden="true" />
+                    </button>
+                  </>
+                )}
                 {aiBusy && (
                   <button
                     className="chat-header-btn"
@@ -2525,6 +2663,47 @@ export default function Chat() {
                       <span><kbd>Enter</kbd> send</span>
                       <span><kbd>Shift</kbd>+<kbd>Enter</kbd> new line</span>
                       <span><kbd>Ctrl</kbd>+<kbd>V</kbd> paste image</span>
+                      <label className="disappear-select-wrap" title="Disappearing messages">
+                        <span>Disappear:</span>
+                        <select
+                          className="disappear-select"
+                          value={disappearSeconds}
+                          onChange={(e) => setDisappearSeconds(Number(e.target.value) || 0)}
+                          aria-label="Disappearing message timer"
+                        >
+                          <option value={0}>Off</option>
+                          <option value={30}>30s</option>
+                          <option value={300}>5m</option>
+                          <option value={3600}>1h</option>
+                          <option value={86400}>24h</option>
+                          <option value={604800}>7d</option>
+                        </select>
+                      </label>
+                      <label className="disappear-select-wrap" title="Allow recipients to forward this message">
+                        <input
+                          type="checkbox"
+                          checked={allowForward}
+                          onChange={(e) => setAllowForward(e.target.checked)}
+                          aria-label="Allow forwarding"
+                        />
+                        <span>Allow forwarding</span>
+                      </label>
+                      {allowForward && (
+                        <label className="disappear-select-wrap" title="Optional forward expiry">
+                          <span>Fwd expires:</span>
+                          <select
+                            className="disappear-select"
+                            value={forwardUntilSeconds}
+                            onChange={(e) => setForwardUntilSeconds(Number(e.target.value) || 0)}
+                            aria-label="Forwarding expiry"
+                          >
+                            <option value={0}>Never</option>
+                            <option value={3600}>1h</option>
+                            <option value={86400}>24h</option>
+                            <option value={604800}>7d</option>
+                          </select>
+                        </label>
+                      )}
                       <span style={{ marginLeft: 'auto', opacity: 0.6 }}>Max 15 MB · multi-file OK</span>
                     </div>
                     <form className="composer" onSubmit={handleSend} style={{ position: 'relative' }}>
@@ -2730,6 +2909,26 @@ export default function Chat() {
         busy={confirmBusy}
         onCancel={closeConfirmDialog}
         onConfirm={handleConfirmDialog}
+      />
+
+      <CallOverlay
+        call={webrtc.call}
+        localStream={webrtc.localStream}
+        remoteStream={webrtc.remoteStream}
+        muted={webrtc.muted}
+        cameraOff={webrtc.cameraOff}
+        peerLabel={
+          webrtc.call
+            ? users.find((u) => String(u.id) === String(webrtc.call.peerId))?.displayName ||
+              users.find((u) => String(u.id) === String(webrtc.call.peerId))?.username ||
+              webrtc.call.peerName
+            : ''
+        }
+        onAccept={() => webrtc.acceptCall().catch(() => showToast('Could not access microphone/camera', 'error'))}
+        onReject={webrtc.rejectCall}
+        onHangup={webrtc.hangup}
+        onToggleMute={webrtc.toggleMute}
+        onToggleCamera={webrtc.toggleCamera}
       />
 
       {showCreateGroup && (

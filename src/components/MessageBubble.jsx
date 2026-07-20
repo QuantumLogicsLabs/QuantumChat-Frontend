@@ -11,6 +11,7 @@ import {
   Smile,
   Star,
   Trash2,
+  Clock,
 } from 'lucide-react';
 import AttachmentBubble from './AttachmentBubble.jsx';
 import GroupMessageContent from './GroupMessageContent.jsx';
@@ -233,7 +234,13 @@ export default function MessageBubble({
                 <span>Copy</span>
               </button>
             )}
-            {hasTextContent && onForward && (
+            {hasTextContent &&
+              onForward &&
+              message.forwardPolicy?.allowForward !== false &&
+              !(
+                message.forwardPolicy?.forwardUntil &&
+                new Date(message.forwardPolicy.forwardUntil).getTime() < Date.now()
+              ) && (
               <button type="button" role="menuitem" onClick={() => { closeAll(); onForward(message); }}>
                 <span className="message-menu-icon" aria-hidden="true"><Forward size={16} strokeWidth={2} /></span>
                 <span>Forward</span>
@@ -305,7 +312,7 @@ export default function MessageBubble({
         transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
       >
         <div className={`message-bubble-wrap ${isMine ? 'mine' : 'theirs'}`}>
-          <div className={`message-bubble ${isMine ? 'mine' : 'theirs'} ${grouped ? 'grouped' : ''}`}>
+          <div className={`message-bubble ${isMine ? 'mine' : 'theirs'} ${grouped ? 'grouped' : ''}${message.expiresAt ? ' has-expiry' : ''}`}>
             {senderLabel && !isMine && !grouped && (
               <div className="message-sender-label">
                 {senderLabel}
@@ -367,6 +374,14 @@ export default function MessageBubble({
               <em>[Unable to decrypt message]</em>
             ) : null}
             <div className="message-time" title={fullTime}>
+              {message.expiresAt ? (
+                <span
+                  className="message-expiry-badge"
+                  title={`Disappears ${new Date(message.expiresAt).toLocaleString()}`}
+                >
+                  <Clock size={11} strokeWidth={2.5} aria-hidden="true" />
+                </span>
+              ) : null}
               {relativeTime}
               {message.editedAt ? <span className="message-edited"> · edited</span> : null}
               {isMine && <ReadReceipt status={receiptStatus} />}

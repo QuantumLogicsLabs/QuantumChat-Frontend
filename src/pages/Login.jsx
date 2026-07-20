@@ -21,6 +21,13 @@ function getFriendlyLoginError(serverError, statusCode) {
     };
   }
 
+  if (msg.includes('authenticator') || msg.includes('2fa')) {
+    return {
+      text: serverError || 'Invalid authenticator code. Try again.',
+      action: null,
+    };
+  }
+
   if (statusCode === 400 || msg.includes('required')) {
     return {
       text: 'Please fill in both your email and password.',
@@ -49,12 +56,14 @@ function getFriendlyLoginError(serverError, statusCode) {
 }
 
 export default function Login() {
-  const { login } = useAuth();
+  const { login, verify2fa } = useAuth();
   const navigate = useNavigate();
   const [form, setForm] = useState({ email: '', password: '' });
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const [pending2fa, setPending2fa] = useState(null);
+  const [totpCode, setTotpCode] = useState('');
 
   useEffect(() => {
     document.title = 'Log in — QuantumChat';
@@ -66,6 +75,25 @@ export default function Login() {
   async function handleSubmit(e) {
     e.preventDefault();
     setError(null);
+
+    if (pending2fa) {
+      if (!/^\d{6}$/.test(totpCode.trim())) {
+        setError({ text: 'Enter the 6-digit code from your authenticator app.', action: null });
+        return;
+      }
+      setLoading(true);
+      try {
+        await verify2fa({ tempToken: pending2fa.tempToken, token: totpCode.trim() });
+        navigate('/chat');
+      } catch (err) {
+        const serverMsg = err.response?.data?.error;
+        const status = err.response?.status;
+        setError(getFriendlyLoginError(serverMsg, status));
+      } finally {
+        setLoading(false);
+      }
+      return;
+    }
 
     if (!form.email.trim()) {
       setError({ text: 'Please enter your email address.', action: null });
@@ -79,7 +107,12 @@ export default function Login() {
 
     setLoading(true);
     try {
-      await login(form);
+      const result = await login(form);
+      if (result?.requires2fa) {
+        setPending2fa({ tempToken: result.tempToken });
+        setTotpCode('');
+        return;
+      }
       navigate('/chat');
     } catch (err) {
       const serverMsg = err.response?.data?.error;
@@ -104,60 +137,100 @@ export default function Login() {
             </span>
           </Link>
           <p className="auth-brand-name">QuantumChat</p>
-          <h1>Welcome back</h1>
-          <p className="auth-subtitle">Sign in to decrypt your conversations.</p>
+          <h1>{pending2fa ? 'Two-factor authentication' : 'Welcome back'}</h1>
+          <p className="auth-subtitle">
+            {pending2fa
+              ? 'Enter the 6-digit code from your authenticator app.'
+              : 'Sign in to decrypt your conversations.'}
+          </p>
         </div>
 
-        <label className="auth-label" htmlFor="login-email">
-          Email address
-        </label>
-        <div className="auth-field">
-          <svg className="auth-field-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-            <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z" />
-            <polyline points="22,6 12,13 2,6" />
-          </svg>
-          <input
-            id="login-email"
-            type="email"
-            placeholder="name@example.com"
-            value={form.email}
-            onChange={(e) => setForm({ ...form, email: e.target.value })}
-            required
-            autoComplete="email"
-          />
-        </div>
+        {!pending2fa ? (
+          <>
+            <label className="auth-label" htmlFor="login-email">
+              Email address
+            </label>
+            <div className="auth-field">
+              <svg className="auth-field-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z" />
+                <polyline points="22,6 12,13 2,6" />
+              </svg>
+              <input
+                id="login-email"
+                type="email"
+                placeholder="name@example.com"
+                value={form.email}
+                onChange={(e) => setForm({ ...form, email: e.target.value })}
+                required
+                autoComplete="email"
+              />
+            </div>
 
-        <div className="auth-label-row">
-          <label className="auth-label" htmlFor="login-password">
-            Password
-          </label>
-          <Link to="/forgot-password" className="auth-text-btn">
-            Forgot password?
-          </Link>
-        </div>
-        <div className="auth-field">
-          <svg className="auth-field-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-            <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
-            <path d="M7 11V7a5 5 0 0 1 10 0v4" />
-          </svg>
-          <input
-            id="login-password"
-            type={showPassword ? 'text' : 'password'}
-            placeholder="Your password"
-            value={form.password}
-            onChange={(e) => setForm({ ...form, password: e.target.value })}
-            required
-            autoComplete="current-password"
-          />
-          <button
-            type="button"
-            className="auth-password-toggle"
-            onClick={() => setShowPassword((v) => !v)}
-            aria-label={showPassword ? 'Hide password' : 'Show password'}
-          >
-            {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
-          </button>
-        </div>
+            <div className="auth-label-row">
+              <label className="auth-label" htmlFor="login-password">
+                Password
+              </label>
+              <Link to="/forgot-password" className="auth-text-btn">
+                Forgot password?
+              </Link>
+            </div>
+            <div className="auth-field">
+              <svg className="auth-field-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+                <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+              </svg>
+              <input
+                id="login-password"
+                type={showPassword ? 'text' : 'password'}
+                placeholder="Your password"
+                value={form.password}
+                onChange={(e) => setForm({ ...form, password: e.target.value })}
+                required
+                autoComplete="current-password"
+              />
+              <button
+                type="button"
+                className="auth-password-toggle"
+                onClick={() => setShowPassword((v) => !v)}
+                aria-label={showPassword ? 'Hide password' : 'Show password'}
+              >
+                {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <label className="auth-label" htmlFor="login-totp">
+              Authenticator code
+            </label>
+            <div className="auth-field">
+              <input
+                id="login-totp"
+                type="text"
+                inputMode="numeric"
+                pattern="[0-9]*"
+                maxLength={6}
+                placeholder="000000"
+                value={totpCode}
+                onChange={(e) => setTotpCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                required
+                autoComplete="one-time-code"
+                autoFocus
+              />
+            </div>
+            <button
+              type="button"
+              className="auth-text-btn"
+              onClick={() => {
+                setPending2fa(null);
+                setTotpCode('');
+                setError(null);
+              }}
+            >
+              Back to password
+            </button>
+          </>
+        )}
 
         {error && (
           <div className="auth-error" role="alert" aria-live="polite">
@@ -171,12 +244,14 @@ export default function Login() {
         )}
 
         <button type="submit" className="auth-submit" disabled={loading}>
-          {loading ? 'Signing in…' : 'Sign in'}
+          {loading ? (pending2fa ? 'Verifying…' : 'Signing in…') : pending2fa ? 'Verify' : 'Sign in'}
         </button>
 
-        <p>
-          Don&apos;t have an account? <Link to="/register">Create one</Link>
-        </p>
+        {!pending2fa && (
+          <p>
+            Don&apos;t have an account? <Link to="/register">Create one</Link>
+          </p>
+        )}
       </form>
     </div>
   );

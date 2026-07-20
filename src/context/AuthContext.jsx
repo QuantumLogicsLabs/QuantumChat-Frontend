@@ -37,14 +37,33 @@ export function AuthProvider({ children }) {
   // different) so Chat always requires importing the keys.txt that belongs
   // to this specific account — wrong-file imports are rejected by importKeys.
   const login = useCallback(async ({ email, password }) => {
-    const { data } = await client.post('/auth/login', { email, password });
-    const { token, user: loggedInUser } = data.data;
+    const deviceLabel = String(navigator.userAgent || '').slice(0, 120);
+    const { data } = await client.post('/auth/login', { email, password, deviceLabel });
+    if (data.data?.requires2fa) {
+      return { requires2fa: true, tempToken: data.data.tempToken };
+    }
+    const { token, user: loggedInUser, sessionId } = data.data;
     const previous = getStoredUser();
     if (previous?.id && String(previous.id) !== String(loggedInUser.id)) {
       clearKeyring(previous.id);
     }
     clearKeyring(loggedInUser.id);
-    saveSession(token, loggedInUser);
+    saveSession(token, loggedInUser, sessionId);
+    setUser(loggedInUser);
+    connectSocket();
+    return loggedInUser;
+  }, []);
+
+  const verify2fa = useCallback(async ({ tempToken, token }) => {
+    const deviceLabel = String(navigator.userAgent || '').slice(0, 120);
+    const { data } = await client.post('/auth/2fa/verify', { tempToken, token, deviceLabel });
+    const { token: jwt, user: loggedInUser, sessionId } = data.data;
+    const previous = getStoredUser();
+    if (previous?.id && String(previous.id) !== String(loggedInUser.id)) {
+      clearKeyring(previous.id);
+    }
+    clearKeyring(loggedInUser.id);
+    saveSession(jwt, loggedInUser, sessionId);
     setUser(loggedInUser);
     connectSocket();
     return loggedInUser;
@@ -110,7 +129,7 @@ export function AuthProvider({ children }) {
 
   return (
     <AuthContext.Provider
-      value={{ user, register, login, logout, regenerateKeys, importKeys, hasLocalKeyring, updateSessionUser }}
+      value={{ user, register, login, verify2fa, logout, regenerateKeys, importKeys, hasLocalKeyring, updateSessionUser }}
     >
       {children}
     </AuthContext.Provider>

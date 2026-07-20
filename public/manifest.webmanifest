@@ -1,0 +1,12 @@
+{
+  "name": "QuantumChat",
+  "short_name": "QuantumChat",
+  "description": "E2E Secure Messaging for Software Engineers",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#07131f",
+  "theme_color": "#3b82f6",
+  "lang": "en"
+}
