@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { getSocket } from '../api/socket.js';
+import { sealMessage, unsealMessage, pickRandom } from '../crypto/keys.js';
+import { findSecretKeyForPublicKey } from '../crypto/keyStorage.js';
 
 const ICE_SERVERS = [{ urls: 'stun:stun.l.google.com:19302' }];
 
@@ -8,11 +10,31 @@ function newCallId() {
   return `call-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
+function sealForPeer(peerPublicKeys, payload) {
+  const keys = (peerPublicKeys || []).filter(Boolean);
+  if (!keys.length) throw new Error('Missing peer public keys for sealed call signaling');
+  return sealMessage(JSON.stringify(payload), pickRandom(keys));
+}
+
+function unsealCallEnvelope(envelope, userId) {
+  if (!envelope?.targetPublicKey) return null;
+  const secret = findSecretKeyForPublicKey(userId, envelope.targetPublicKey);
+  if (!secret) return null;
+  const text = unsealMessage(envelope, secret);
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
 /**
- * DM WebRTC call state machine. Signaling via Socket.IO; media is peer-to-peer.
+ * DM WebRTC call state machine.
+ * Signaling is X5 sealed-box envelopes; media is peer-to-peer.
  */
-export default function useWebRTCCall({ userId, onMissed } = {}) {
-  const [call, setCall] = useState(null); // { callId, peerId, peerName, video, role, status }
+export default function useWebRTCCall({ userId, resolvePeerPublicKeys, onMissed } = {}) {
+  const [call, setCall] = useState(null);
   const pcRef = useRef(null);
   const localStreamRef = useRef(null);
   const remoteStreamRef = useRef(null);
@@ -22,10 +44,31 @@ export default function useWebRTCCall({ userId, onMissed } = {}) {
   const [cameraOff, setCameraOff] = useState(false);
   const callRef = useRef(null);
   const pendingIceRef = useRef([]);
+  const peerKeysCacheRef = useRef(new Map());
 
   useEffect(() => {
     callRef.current = call;
   }, [call]);
+
+  const getPeerKeys = useCallback(
+    async (peerId) => {
+      const id = String(peerId);
+      if (peerKeysCacheRef.current.has(id)) return peerKeysCacheRef.current.get(id);
+      const keys = (await resolvePeerPublicKeys?.(id)) || [];
+      peerKeysCacheRef.current.set(id, keys);
+      return keys;
+    },
+    [resolvePeerPublicKeys]
+  );
+
+  const emitSealed = useCallback(
+    async (eventName, { to, callId, payload }) => {
+      const keys = await getPeerKeys(to);
+      const envelope = sealForPeer(keys, payload);
+      getSocket()?.emit(eventName, { to, callId, envelope });
+    },
+    [getPeerKeys]
+  );
 
   const cleanupMedia = useCallback(() => {
     pendingIceRef.current = [];
@@ -63,11 +106,11 @@ export default function useWebRTCCall({ userId, onMissed } = {}) {
         if (!e.candidate) return;
         const c = callRef.current;
         if (!c) return;
-        getSocket()?.emit('call:ice', {
+        emitSealed('call:ice', {
           to: peerId,
           callId: c.callId,
-          candidate: e.candidate.toJSON(),
-        });
+          payload: { type: 'ice', callId: c.callId, candidate: e.candidate.toJSON() },
+        }).catch(() => {});
       };
 
       pc.ontrack = (e) => {
@@ -84,7 +127,7 @@ export default function useWebRTCCall({ userId, onMissed } = {}) {
 
       return pc;
     },
-    [endCallLocal]
+    [endCallLocal, emitSealed]
   );
 
   const attachLocalMedia = useCallback(async (video) => {
@@ -111,9 +154,13 @@ export default function useWebRTCCall({ userId, onMissed } = {}) {
       };
       setCall(next);
       callRef.current = next;
-      getSocket()?.emit('call:invite', { to: peerId, callId, video: Boolean(video) });
+      await emitSealed('call:invite', {
+        to: peerId,
+        callId,
+        payload: { type: 'invite', callId, video: Boolean(video) },
+      });
     },
-    []
+    [emitSealed]
   );
 
   const acceptCall = useCallback(async () => {
@@ -123,29 +170,45 @@ export default function useWebRTCCall({ userId, onMissed } = {}) {
       const stream = await attachLocalMedia(c.video);
       const pc = ensurePc(c.peerId);
       stream.getTracks().forEach((track) => pc.addTrack(track, stream));
-      getSocket()?.emit('call:accept', { to: c.peerId, callId: c.callId });
+      await emitSealed('call:accept', {
+        to: c.peerId,
+        callId: c.callId,
+        payload: { type: 'accept', callId: c.callId },
+      });
       setCall((prev) => (prev ? { ...prev, status: 'connecting' } : prev));
     } catch (err) {
-      getSocket()?.emit('call:reject', { to: c.peerId, callId: c.callId, reason: 'media_failed' });
+      await emitSealed('call:reject', {
+        to: c.peerId,
+        callId: c.callId,
+        payload: { type: 'reject', callId: c.callId, reason: 'media_failed' },
+      }).catch(() => {});
       endCallLocal();
       throw err;
     }
-  }, [attachLocalMedia, ensurePc, endCallLocal]);
+  }, [attachLocalMedia, ensurePc, endCallLocal, emitSealed]);
 
   const rejectCall = useCallback(() => {
     const c = callRef.current;
     if (!c) return;
-    getSocket()?.emit('call:reject', { to: c.peerId, callId: c.callId });
+    emitSealed('call:reject', {
+      to: c.peerId,
+      callId: c.callId,
+      payload: { type: 'reject', callId: c.callId, reason: 'rejected' },
+    }).catch(() => {});
     endCallLocal();
-  }, [endCallLocal]);
+  }, [endCallLocal, emitSealed]);
 
   const hangup = useCallback(() => {
     const c = callRef.current;
     if (c) {
-      getSocket()?.emit('call:hangup', { to: c.peerId, callId: c.callId });
+      emitSealed('call:hangup', {
+        to: c.peerId,
+        callId: c.callId,
+        payload: { type: 'hangup', callId: c.callId },
+      }).catch(() => {});
     }
     endCallLocal();
-  }, [endCallLocal]);
+  }, [endCallLocal, emitSealed]);
 
   const toggleMute = useCallback(() => {
     const stream = localStreamRef.current;
@@ -182,17 +245,27 @@ export default function useWebRTCCall({ userId, onMissed } = {}) {
       }
     }
 
-    function onInvite({ from, callId, video }) {
+    function openEnvelope(envelope) {
+      return unsealCallEnvelope(envelope, userId);
+    }
+
+    function onInvite({ from, callId, envelope }) {
       if (!from || !callId) return;
+      const body = openEnvelope(envelope);
+      if (!body || body.type !== 'invite') return;
       if (callRef.current) {
-        socket.emit('call:reject', { to: from, callId, reason: 'busy' });
+        emitSealed('call:reject', {
+          to: from,
+          callId,
+          payload: { type: 'reject', callId, reason: 'busy' },
+        }).catch(() => {});
         return;
       }
       const next = {
         callId: String(callId),
         peerId: String(from),
         peerName: 'Incoming call',
-        video: Boolean(video),
+        video: Boolean(body.video),
         role: 'callee',
         status: 'incoming',
       };
@@ -200,7 +273,9 @@ export default function useWebRTCCall({ userId, onMissed } = {}) {
       callRef.current = next;
     }
 
-    async function onAccept({ from, callId }) {
+    async function onAccept({ from, callId, envelope }) {
+      const body = openEnvelope(envelope);
+      if (!body || body.type !== 'accept') return;
       const c = callRef.current;
       if (!c || c.role !== 'caller' || String(c.callId) !== String(callId)) return;
       try {
@@ -209,55 +284,73 @@ export default function useWebRTCCall({ userId, onMissed } = {}) {
         stream.getTracks().forEach((track) => pc.addTrack(track, stream));
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
-        socket.emit('call:offer', { to: from, callId: c.callId, sdp: offer });
+        await emitSealed('call:offer', {
+          to: from,
+          callId: c.callId,
+          payload: { type: 'offer', callId: c.callId, sdp: offer },
+        });
         setCall((prev) => (prev ? { ...prev, status: 'connecting' } : prev));
       } catch {
         hangup();
       }
     }
 
-    async function onOffer({ from, callId, sdp }) {
+    async function onOffer({ from, callId, envelope }) {
+      const body = openEnvelope(envelope);
+      if (!body || body.type !== 'offer' || !body.sdp) return;
       const c = callRef.current;
       if (!c || String(c.callId) !== String(callId)) return;
       const pc = ensurePc(c.peerId);
-      await pc.setRemoteDescription(sdp);
+      await pc.setRemoteDescription(body.sdp);
       await flushIce(pc);
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
-      socket.emit('call:answer', { to: from, callId: c.callId, sdp: answer });
+      await emitSealed('call:answer', {
+        to: from,
+        callId: c.callId,
+        payload: { type: 'answer', callId: c.callId, sdp: answer },
+      });
       setCall((prev) => (prev ? { ...prev, status: 'active' } : prev));
     }
 
-    async function onAnswer({ callId, sdp }) {
+    async function onAnswer({ callId, envelope }) {
+      const body = openEnvelope(envelope);
+      if (!body || body.type !== 'answer' || !body.sdp) return;
       const c = callRef.current;
       if (!c || String(c.callId) !== String(callId) || !pcRef.current) return;
-      await pcRef.current.setRemoteDescription(sdp);
+      await pcRef.current.setRemoteDescription(body.sdp);
       await flushIce(pcRef.current);
       setCall((prev) => (prev ? { ...prev, status: 'active' } : prev));
     }
 
-    async function onIce({ callId, candidate }) {
+    async function onIce({ callId, envelope }) {
+      const body = openEnvelope(envelope);
+      if (!body || body.type !== 'ice' || !body.candidate) return;
       const c = callRef.current;
-      if (!c || String(c.callId) !== String(callId) || !candidate) return;
+      if (!c || String(c.callId) !== String(callId)) return;
       if (!pcRef.current?.remoteDescription) {
-        pendingIceRef.current.push(candidate);
+        pendingIceRef.current.push(body.candidate);
         return;
       }
       try {
-        await pcRef.current.addIceCandidate(candidate);
+        await pcRef.current.addIceCandidate(body.candidate);
       } catch {
         /* ignore */
       }
     }
 
-    function onReject({ callId }) {
+    function onReject({ callId, envelope }) {
+      const body = openEnvelope(envelope);
+      if (!body || body.type !== 'reject') return;
       const c = callRef.current;
       if (!c || String(c.callId) !== String(callId)) return;
       onMissed?.(c);
       endCallLocal();
     }
 
-    function onHangup({ callId }) {
+    function onHangup({ callId, envelope }) {
+      const body = openEnvelope(envelope);
+      if (!body || body.type !== 'hangup') return;
       const c = callRef.current;
       if (!c || String(c.callId) !== String(callId)) return;
       endCallLocal();
@@ -280,7 +373,7 @@ export default function useWebRTCCall({ userId, onMissed } = {}) {
       socket.off('call:answer', onAnswer);
       socket.off('call:ice', onIce);
     };
-  }, [userId, attachLocalMedia, ensurePc, endCallLocal, hangup, onMissed]);
+  }, [userId, attachLocalMedia, ensurePc, endCallLocal, hangup, onMissed, emitSealed]);
 
   useEffect(() => () => cleanupMedia(), [cleanupMedia]);
 
