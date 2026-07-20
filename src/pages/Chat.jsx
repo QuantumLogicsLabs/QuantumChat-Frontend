@@ -127,10 +127,6 @@ function isSameDay(d1, d2) {
 export default function Chat() {
   const { user, logout, regenerateKeys, importKeys, hasLocalKeyring, updateSessionUser } = useAuth();
   const { showToast } = useToast();
-  const webrtc = useWebRTCCall({
-    userId: user?.id,
-    onMissed: () => showToast('Call ended or declined', 'info'),
-  });
 
   const [users, setUsers] = useState([]);
   const [groups, setGroups] = useState([]);
@@ -211,7 +207,22 @@ export default function Chat() {
   const typingTimeoutRef = useRef(null);
   const imageSrcMapRef = useRef(new Map());
   const aiAbortRef = useRef(null);
+  const usersRef = useRef([]);
   selectedRef.current = selected;
+  usersRef.current = users;
+
+  const webrtc = useWebRTCCall({
+    userId: user?.id,
+    resolvePeerPublicKeys: async (peerId) => {
+      const peer =
+        (selectedRef.current?.type === 'dm' &&
+          String(selectedRef.current.id) === String(peerId) &&
+          selectedRef.current.peer) ||
+        usersRef.current.find((u) => String(u.id) === String(peerId));
+      return peer?.publicKeys || [];
+    },
+    onMissed: () => showToast('Call ended or declined', 'info'),
+  });
 
   const bumpActivity = useCallback(() => setActivityTick((n) => n + 1), []);
 
@@ -2136,7 +2147,7 @@ export default function Chat() {
         </div>
         {canChat && (
           <>
-            <StoriesRail currentUser={user} onError={setError} />
+            <StoriesRail currentUser={user} users={users} onError={setError} />
             <div className="sidebar-search">
               <input
                 placeholder="Search conversations…"

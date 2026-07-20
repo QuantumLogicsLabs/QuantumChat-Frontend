@@ -1,15 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import client from '../api/client.js';
-import { getToken } from '../crypto/keyStorage.js';
+import { getToken, findSecretKeyForPublicKey } from '../crypto/keyStorage.js';
 import { getSocket } from '../api/socket.js';
+import { sealMessage, unsealMessage, pickRandom } from '../crypto/keys.js';
 import UserAvatar from './UserAvatar.jsx';
 
 const MAX_STORY_SECONDS = 60;
 const API_BASE = `${import.meta.env.VITE_API_URL || 'http://localhost:5000'}/api`;
-
-function storyKeyStorageKey(storyId) {
-  return `qc_story_keys_${storyId}`;
-}
 
 function bytesToBase64(bytes) {
   let s = '';
@@ -78,7 +75,32 @@ function probeMediaDuration(file) {
   });
 }
 
-export default function StoriesRail({ currentUser, onError }) {
+function buildStoryEnvelopes(audience, keyB64, ivB64) {
+  const secretPayload = JSON.stringify({ keyB64, ivB64 });
+  return audience.map((u) => {
+    const keys = (u.publicKeys || []).filter(Boolean);
+    if (!keys.length) throw new Error(`Missing X5 keys for ${u.username || u.id}`);
+    const sealed = sealMessage(secretPayload, pickRandom(keys));
+    return { user: u.id, ...sealed };
+  });
+}
+
+function unlockStoryKey(story, currentUserId) {
+  const envelopes = story.envelopes || [];
+  const mine = envelopes.find((e) => String(e.user) === String(currentUserId));
+  if (!mine?.targetPublicKey) return null;
+  const secret = findSecretKeyForPublicKey(currentUserId, mine.targetPublicKey);
+  if (!secret) return null;
+  const text = unsealMessage(mine, secret);
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+export default function StoriesRail({ currentUser, users = [], onError }) {
   const [stories, setStories] = useState([]);
   const [viewer, setViewer] = useState(null);
   const [uploading, setUploading] = useState(false);
@@ -89,60 +111,50 @@ export default function StoriesRail({ currentUser, onError }) {
     for (const story of stories) {
       const uid = String(story.user?.id || story.user);
       if (!map.has(uid)) {
-        map.set(uid, {
-          user: story.user,
-          items: [],
-        });
+        map.set(uid, { user: story.user, items: [] });
       }
       map.get(uid).items.push(story);
     }
-    // Put current user first
     const list = [...map.values()];
     list.sort((a, b) => {
-      const aMe = String(a.user?.id) === String(currentUser?.id);
-      const bMe = String(b.user?.id) === String(currentUser?.id);
-      if (aMe !== bMe) return aMe ? -1 : 1;
-      return new Date(b.items[0].createdAt) - new Date(a.items[0].createdAt);
+      const aOwn = String(a.user?.id) === String(currentUser?.id);
+      const bOwn = String(b.user?.id) === String(currentUser?.id);
+      if (aOwn && !bOwn) return -1;
+      if (!aOwn && bOwn) return 1;
+      return 0;
     });
     return list;
-  }, [stories, currentUser]);
+  }, [stories, currentUser?.id]);
 
   async function loadStories() {
-    try {
-      const { data } = await client.get('/stories');
-      setStories(data.data || []);
-    } catch (err) {
-      onError?.(err.response?.data?.error || 'Failed to load stories');
-    }
+    const { data } = await client.get('/stories');
+    setStories(data.data || []);
   }
 
   useEffect(() => {
-    loadStories();
-    const id = setInterval(loadStories, 30000);
-    return () => clearInterval(id);
+    loadStories().catch(() => {});
   }, []);
 
   useEffect(() => {
     const socket = getSocket();
     if (!socket) return undefined;
-    function onDeleted(payload) {
-      const id = String(payload?.id || '');
-      if (!id) return;
-      try {
-        localStorage.removeItem(storyKeyStorageKey(id));
-      } catch {
-        // ignore
-      }
-      setStories((prev) => prev.filter((s) => String(s.id) !== id));
-      setViewer((v) => {
-        if (!v) return v;
-        const items = v.group.items.filter((s) => String(s.id) !== id);
-        if (!items.length) return null;
-        return { ...v, group: { ...v.group, items }, index: Math.min(v.index, items.length - 1) };
+    function onNew(payload) {
+      if (!payload?.id) return;
+      setStories((prev) => {
+        if (prev.some((s) => String(s.id) === String(payload.id))) return prev;
+        return [payload, ...prev];
       });
     }
+    function onDeleted({ id } = {}) {
+      if (!id) return;
+      setStories((prev) => prev.filter((s) => String(s.id) !== String(id)));
+    }
+    socket.on('story:new', onNew);
     socket.on('story:deleted', onDeleted);
-    return () => socket.off('story:deleted', onDeleted);
+    return () => {
+      socket.off('story:new', onNew);
+      socket.off('story:deleted', onDeleted);
+    };
   }, []);
 
   async function handleFile(e) {
@@ -161,12 +173,30 @@ export default function StoriesRail({ currentUser, onError }) {
       }
 
       const form = new FormData();
-      let pendingKey = null;
       const canSeal = typeof crypto !== 'undefined' && crypto.subtle;
 
       if (canSeal) {
         const sealed = await aesGcmEncryptBlob(file);
-        // Keep original mimetype so upload middleware accepts the ciphertext blob.
+        const audienceMap = new Map();
+        audienceMap.set(String(currentUser.id), {
+          id: currentUser.id,
+          username: currentUser.username,
+          publicKeys: currentUser.publicKeys || [],
+        });
+        for (const u of users) {
+          if (!u?.id || !u.publicKeys?.length) continue;
+          audienceMap.set(String(u.id), {
+            id: u.id,
+            username: u.username,
+            publicKeys: u.publicKeys,
+          });
+        }
+        const audience = [...audienceMap.values()];
+        if (!audience[0].publicKeys?.length) {
+          throw new Error('Your account is missing X5 public keys');
+        }
+        const envelopes = buildStoryEnvelopes(audience, sealed.keyB64, sealed.ivB64);
+
         form.append(
           'file',
           new Blob([sealed.cipherBytes], {
@@ -179,25 +209,14 @@ export default function StoriesRail({ currentUser, onError }) {
         if (file.type.startsWith('image/')) form.append('mediaType', 'image');
         else if (file.type.startsWith('video/')) form.append('mediaType', 'video');
         else if (file.type.startsWith('audio/')) form.append('mediaType', 'audio');
-        form.append('envelopeNonce', sealed.ivB64);
-        pendingKey = { keyB64: sealed.keyB64, ivB64: sealed.ivB64 };
+        form.append('contentIv', sealed.ivB64);
+        form.append('envelopes', JSON.stringify(envelopes));
       } else {
         form.append('file', file);
       }
       form.append('durationMs', String(durationMs));
 
-      const { data } = await client.post('/stories', form);
-      const story = data.data;
-      if (pendingKey && story?.id) {
-        try {
-          localStorage.setItem(
-            storyKeyStorageKey(story.id),
-            JSON.stringify(pendingKey)
-          );
-        } catch {
-          // storage full / private mode
-        }
-      }
+      await client.post('/stories', form);
       await loadStories();
     } catch (err) {
       onError?.(err.response?.data?.error || err.message || 'Failed to upload story');
@@ -209,7 +228,7 @@ export default function StoriesRail({ currentUser, onError }) {
   return (
     <div className="stories-rail">
       <p className="stories-privacy-note">
-        Sealed stories decrypt only on this device. Peers see them as unavailable. Use chat for sealed media fan-out.
+        Sealed stories use X5 envelopes so allowed contacts can decrypt; the server only stores ciphertext.
       </p>
       <button
         type="button"
@@ -284,19 +303,10 @@ function StoryViewer({ group, startIndex, currentUserId, onClose, onDeleted }) {
     setSealedBlocked(false);
 
     (async () => {
-      if (story.sealed && !isOwn) {
-        setSealedBlocked(true);
-        return;
-      }
-
-      if (story.sealed && isOwn) {
-        let stored;
-        try {
-          stored = JSON.parse(localStorage.getItem(storyKeyStorageKey(story.id)) || 'null');
-        } catch {
-          stored = null;
-        }
-        if (!stored?.keyB64 || !stored?.ivB64) {
+      if (story.sealed) {
+        const unlocked = unlockStoryKey(story, currentUserId);
+        const ivB64 = unlocked?.ivB64 || story.contentIv;
+        if (!unlocked?.keyB64 || !ivB64) {
           setSealedBlocked(true);
           return;
         }
@@ -304,11 +314,16 @@ function StoryViewer({ group, startIndex, currentUserId, onClose, onDeleted }) {
         const res = await fetch(`${API_BASE}/stories/${story.id}/media`, {
           headers: token ? { Authorization: `Bearer ${token}` } : {},
         });
-        if (!res.ok) throw new Error('Failed to load story media');
+        if (!res.ok) {
+          setSealedBlocked(true);
+          return;
+        }
         const cipherBytes = new Uint8Array(await res.arrayBuffer());
-        const plain = await aesGcmDecryptBytes(cipherBytes, stored.keyB64, stored.ivB64);
+        const plain = await aesGcmDecryptBytes(cipherBytes, unlocked.keyB64, ivB64);
         if (cancelled) return;
-        objectUrl = URL.createObjectURL(new Blob([plain], { type: story.mimetype || 'application/octet-stream' }));
+        objectUrl = URL.createObjectURL(
+          new Blob([plain], { type: story.mimetype || 'application/octet-stream' })
+        );
         setMediaUrl(objectUrl);
         return;
       }
@@ -332,7 +347,7 @@ function StoryViewer({ group, startIndex, currentUserId, onClose, onDeleted }) {
       cancelled = true;
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [story?.id, story?.sealed, story?.mimetype, isOwn]);
+  }, [story, currentUserId]);
 
   useEffect(() => {
     function onKey(e) {
@@ -347,11 +362,6 @@ function StoryViewer({ group, startIndex, currentUserId, onClose, onDeleted }) {
   async function handleDelete() {
     if (!window.confirm('Delete this story?')) return;
     await client.delete(`/stories/${story.id}`);
-    try {
-      localStorage.removeItem(storyKeyStorageKey(story.id));
-    } catch {
-      // ignore
-    }
     onDeleted?.();
   }
 
@@ -367,24 +377,19 @@ function StoryViewer({ group, startIndex, currentUserId, onClose, onDeleted }) {
               size="sm"
             />
             <span>{group.user?.username}</span>
-            {story.sealed ? <span className="story-sealed-badge">Sealed</span> : null}
+            {story.sealed ? <span className="story-sealed-badge">Sealed X5</span> : null}
           </div>
-          <button type="button" className="create-group-close" onClick={onClose} aria-label="Close">
+          <button type="button" onClick={onClose} aria-label="Close">
             ×
           </button>
         </div>
         <div className="story-viewer-progress">
           {group.items.map((s, i) => (
-            <span key={s.id} className={i <= index ? 'on' : ''} />
+            <span key={s.id} className={i === index ? 'on' : ''} />
           ))}
         </div>
-        <div
-          className="story-viewer-media"
-          onClick={() => setIndex((i) => (i < group.items.length - 1 ? i + 1 : (onClose(), i)))}
-        >
-          {sealedBlocked && (
-            <p className="empty-hint">Sealed story — unavailable on this build</p>
-          )}
+        <div className="story-viewer-media">
+          {sealedBlocked && <p className="empty-hint">Sealed story — no envelope for your keys</p>}
           {!sealedBlocked && !mediaUrl && <p className="empty-hint">Loading…</p>}
           {mediaUrl && story.mediaType === 'image' && <img src={mediaUrl} alt="" />}
           {mediaUrl && story.mediaType === 'video' && <video src={mediaUrl} autoPlay controls />}
@@ -393,7 +398,7 @@ function StoryViewer({ group, startIndex, currentUserId, onClose, onDeleted }) {
         {story.caption && <p className="story-caption">{story.caption}</p>}
         <div className="story-viewer-actions">
           {isOwn && (
-            <button type="button" className="confirm-btn danger" onClick={handleDelete}>
+            <button type="button" onClick={handleDelete}>
               Delete
             </button>
           )}
