@@ -37,7 +37,7 @@ export default function SettingsModal({
   onLogout,
   onExportChat,
 }) {
-  const { theme, toggleTheme } = useTheme();
+  const { theme, setTheme } = useTheme();
   const { importKeys } = useAuth();
   const closeRef = useRef(null);
   const keyInputRef = useRef(null);
@@ -73,7 +73,6 @@ export default function SettingsModal({
   const [totpPassword, setTotpPassword] = useState('');
   const [totpBusy, setTotpBusy] = useState(false);
 
-  const isDark = theme === 'dark';
   const shownName = user?.displayName || user?.username || 'You';
   const currentSessionId = getSessionId();
 
@@ -575,7 +574,18 @@ export default function SettingsModal({
 
               <div className="settings-fieldset">
                 <h3 className="settings-section-title">Appearance</h3>
-                <ToggleRow label="Dark theme" hint={isDark ? 'On' : 'Off'} checked={isDark} onChange={toggleTheme} />
+                <ToggleRow
+                  label="Dark theme"
+                  hint={theme === 'dark' ? 'On' : 'Off'}
+                  checked={theme === 'dark'}
+                  onChange={(checked) => setTheme(checked ? 'dark' : 'light')}
+                />
+                <ToggleRow
+                  label="Eyecare mode"
+                  hint={theme === 'eyecare' ? 'On' : 'Off'}
+                  checked={theme === 'eyecare'}
+                  onChange={(checked) => setTheme(checked ? 'eyecare' : 'light')}
+                />
               </div>
             </section>
           )}
