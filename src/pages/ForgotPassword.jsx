@@ -42,7 +42,7 @@ export default function ForgotPassword() {
         <p className="auth-subtitle">
           Resets login access only. Encrypted message keys stay on your devices — keep your keys.txt backup.
         </p>
-        {error && <div className="auth-error">{error}</div>}
+        {error && <div className="auth-error" role="alert" aria-live="polite">{error}</div>}
         {done ? (
           <div className="settings-ok">
             <p>{done.message}</p>

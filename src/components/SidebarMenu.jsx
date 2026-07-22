@@ -1,15 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { LogOut, MoreVertical, Moon, Settings, Sun, Eye } from 'lucide-react';
-import { useTheme } from '../context/ThemeContext.jsx';
+import { LogOut, MoreVertical, Settings } from 'lucide-react';
 
 export default function SidebarMenu({ onSettings, onLogout }) {
-  const { theme, toggleTheme } = useTheme();
   const [open, setOpen] = useState(false);
   const rootRef = useRef(null);
-
-  const isChecked = theme === 'dark' || theme === 'eyecare';
-  const themeLabel = theme === 'dark' ? 'Dark mode' : theme === 'light' ? 'Light mode' : 'Eyecare mode';
 
   useEffect(() => {
     if (!open) return undefined;
@@ -54,28 +49,6 @@ export default function SidebarMenu({ onSettings, onLogout }) {
             exit={{ opacity: 0, y: -4, scale: 0.98 }}
             transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
           >
-            <button
-              type="button"
-              className="sidebar-menu-item theme-item"
-              role="menuitemcheckbox"
-              aria-checked={isChecked}
-              onClick={toggleTheme}
-            >
-              <span className="sidebar-menu-item-left">
-                {theme === 'dark' ? (
-                  <Moon size={16} aria-hidden="true" />
-                ) : theme === 'light' ? (
-                  <Sun size={16} aria-hidden="true" />
-                ) : (
-                  <Eye size={16} aria-hidden="true" />
-                )}
-                <span>{themeLabel}</span>
-              </span>
-              <span className={`menu-switch ${isChecked ? 'on' : ''}`} aria-hidden="true">
-                <span className="menu-switch-knob" />
-              </span>
-            </button>
-
             <button
               type="button"
               className="sidebar-menu-item"

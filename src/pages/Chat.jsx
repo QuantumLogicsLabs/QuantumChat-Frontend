@@ -5,6 +5,7 @@ import {
   BarChart2,
   Calendar,
   Camera,
+  HelpCircle,
   Megaphone,
   Menu,
   MessageSquare,
@@ -14,6 +15,7 @@ import {
   Phone,
   Search,
   Send,
+  Settings,
   Settings2,
   Smile,
   Square,
@@ -54,11 +56,9 @@ import UserProfileModal from '../components/UserProfileModal.jsx';
 import UserAvatar from '../components/UserAvatar.jsx';
 import MessageBubble from '../components/MessageBubble.jsx';
 import EmojiPicker from '../components/EmojiPicker.jsx';
-import SidebarMenu from '../components/SidebarMenu.jsx';
+import ConfirmDialog from '../components/ConfirmDialog.jsx';
 import SettingsModal from '../components/SettingsModal.jsx';
 import StoriesRail from '../components/StoriesRail.jsx';
-import ConfirmDialog from '../components/ConfirmDialog.jsx';
-import ThemeSwitcher from '../components/ThemeSwitcher.jsx';
 import DateSeparator from '../components/DateSeparator.jsx';
 import MessageSearch from '../components/MessageSearch.jsx';
 import DragDropOverlay from '../components/DragDropOverlay.jsx';
@@ -187,6 +187,9 @@ export default function Chat() {
   const [pendingAnnouncement, setPendingAnnouncement] = useState(false);
   const [aiPanelOpen, setAiPanelOpen] = useState(false);
   const [aiBusy, setAiBusy] = useState(false);
+  const [emailBannerDismissed, setEmailBannerDismissed] = useState(false);
+  const [composerHelpOpen, setComposerHelpOpen] = useState(false);
+  const [composerOptionsOpen, setComposerOptionsOpen] = useState(false);
 
   const messageListRef = useRef(null);
   const bottomRef = useRef(null);
@@ -2141,8 +2144,9 @@ export default function Chat() {
             </div>
           </div>
           <div className="sidebar-header-actions" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <ThemeSwitcher />
-            <SidebarMenu onSettings={() => setShowSettings(true)} onLogout={handleLogout} />
+            <button type="button" className="icon-btn" onClick={() => setShowSettings(true)} title="Settings" aria-label="Settings">
+              <Settings size={20} strokeWidth={2} aria-hidden="true" />
+            </button>
           </div>
         </div>
         {canChat && (
@@ -2221,26 +2225,31 @@ export default function Chat() {
 
         {canChat && (
           <>
-            {user && !user.emailVerified && (
-              <div className="email-verify-banner">
-                <span>Verify your email</span>
-                <button
-                  type="button"
-                  className="email-verify-banner-btn"
-                  onClick={async () => {
-                    try {
-                      const { data } = await client.post('/auth/resend-verification');
-                      const verifyUrl = data?.data?.verifyUrl;
-                      showToast(
-                        verifyUrl ? `Verification link: ${verifyUrl}` : 'Verification email sent',
-                        verifyUrl ? 'info' : 'success'
-                      );
-                    } catch (err) {
-                      showToast(err.response?.data?.error || 'Could not resend verification', 'error');
-                    }
-                  }}
-                >
-                  Resend
+            {user && !user.emailVerified && !emailBannerDismissed && (
+              <div className="email-verify-banner email-verify-banner-dismissible">
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <span>Verify your email</span>
+                  <button
+                    type="button"
+                    className="email-verify-banner-btn"
+                    onClick={async () => {
+                      try {
+                        const { data } = await client.post('/auth/resend-verification');
+                        const verifyUrl = data?.data?.verifyUrl;
+                        showToast(
+                          verifyUrl ? `Verification link: ${verifyUrl}` : 'Verification email sent',
+                          verifyUrl ? 'info' : 'success'
+                        );
+                      } catch (err) {
+                        showToast(err.response?.data?.error || 'Could not resend verification', 'error');
+                      }
+                    }}
+                  >
+                    Resend
+                  </button>
+                </div>
+                <button type="button" className="email-verify-banner-dismiss" onClick={() => setEmailBannerDismissed(true)}>
+                  <X size={16} />
                 </button>
               </div>
             )}
@@ -2312,7 +2321,7 @@ export default function Chat() {
                 {selected?.type === 'dm' && !selected?.peer?.isSystemUser && selected?.peer?.systemRole !== 'quantum_ai' && (
                   <>
                     <button
-                      className="chat-header-btn icon-only"
+                      className="icon-btn"
                       type="button"
                       title="Voice call"
                       aria-label="Voice call"
@@ -2327,7 +2336,7 @@ export default function Chat() {
                       <Phone size={18} strokeWidth={2} aria-hidden="true" />
                     </button>
                     <button
-                      className="chat-header-btn icon-only"
+                      className="icon-btn"
                       type="button"
                       title="Video call"
                       aria-label="Video call"
@@ -2345,17 +2354,16 @@ export default function Chat() {
                 )}
                 {aiBusy && (
                   <button
-                    className="chat-header-btn"
+                    className="icon-btn active"
                     type="button"
                     onClick={() => aiAbortRef.current?.abort()}
                     title="Stop QuantumAI"
                   >
                     <Square size={17} />
-                    <span>Stop AI</span>
                   </button>
                 )}
                 <button
-                  className={`chat-header-btn quantum-ai-toggle${aiPanelOpen ? ' active' : ''}`}
+                  className={`icon-btn accent${aiPanelOpen ? ' active' : ''}`}
                   type="button"
                   onClick={() => setAiPanelOpen((open) => !open)}
                   title="Open QuantumAI"
@@ -2363,11 +2371,10 @@ export default function Chat() {
                   aria-pressed={aiPanelOpen}
                 >
                   <MessageSquare size={18} strokeWidth={2} aria-hidden="true" />
-                  <span>QuantumAI</span>
                 </button>
                 {selected?.type === 'group' && (
                   <button
-                    className="chat-header-btn icon-only"
+                    className="icon-btn"
                     onClick={() => setShowGroupSettings(true)}
                     title="Group settings"
                     aria-label="Group settings"
@@ -2377,7 +2384,7 @@ export default function Chat() {
                 )}
                 {selected && (
                   <button
-                    className={`chat-header-btn icon-only${searchOpen ? ' active' : ''}`}
+                    className={`icon-btn${searchOpen ? ' active' : ''}`}
                     onClick={() => setSearchOpen(!searchOpen)}
                     title="Search messages (Ctrl+K)"
                     aria-label="Search messages"
@@ -2404,12 +2411,17 @@ export default function Chat() {
 
             {!selected ? (
               <div className="chat-empty-state">
-                {floatingBubbles}
+                <div className="chat-empty-rings">
+                  <div className="ring ring-1"></div>
+                  <div className="ring ring-2"></div>
+                  <div className="ring ring-3"></div>
+                </div>
                 <div className="chat-empty-icon">
                   <MessageSquare size={30} strokeWidth={1.5} aria-hidden="true" />
                 </div>
                 <h2>No conversation selected</h2>
                 <p>Choose a person or group from the sidebar, or create a new group</p>
+                <p className="chat-empty-tagline">End-to-end encrypted conversations</p>
               </div>
             ) : (
               <>
@@ -2670,52 +2682,77 @@ export default function Chat() {
                         ))}
                       </div>
                     )}
-                    <div className="composer-hint">
-                      <span><kbd>Enter</kbd> send</span>
-                      <span><kbd>Shift</kbd>+<kbd>Enter</kbd> new line</span>
-                      <span><kbd>Ctrl</kbd>+<kbd>V</kbd> paste image</span>
-                      <label className="disappear-select-wrap" title="Disappearing messages">
-                        <span>Disappear:</span>
-                        <select
-                          className="disappear-select"
-                          value={disappearSeconds}
-                          onChange={(e) => setDisappearSeconds(Number(e.target.value) || 0)}
-                          aria-label="Disappearing message timer"
-                        >
-                          <option value={0}>Off</option>
-                          <option value={30}>30s</option>
-                          <option value={300}>5m</option>
-                          <option value={3600}>1h</option>
-                          <option value={86400}>24h</option>
-                          <option value={604800}>7d</option>
-                        </select>
-                      </label>
-                      <label className="disappear-select-wrap" title="Allow recipients to forward this message">
-                        <input
-                          type="checkbox"
-                          checked={allowForward}
-                          onChange={(e) => setAllowForward(e.target.checked)}
-                          aria-label="Allow forwarding"
-                        />
-                        <span>Allow forwarding</span>
-                      </label>
-                      {allowForward && (
-                        <label className="disappear-select-wrap" title="Optional forward expiry">
-                          <span>Fwd expires:</span>
-                          <select
-                            className="disappear-select"
-                            value={forwardUntilSeconds}
-                            onChange={(e) => setForwardUntilSeconds(Number(e.target.value) || 0)}
-                            aria-label="Forwarding expiry"
-                          >
-                            <option value={0}>Never</option>
-                            <option value={3600}>1h</option>
-                            <option value={86400}>24h</option>
-                            <option value={604800}>7d</option>
-                          </select>
-                        </label>
+                    <div className="composer-tools-bar">
+                      <button
+                        type="button"
+                        className={`composer-tools-btn ${composerHelpOpen ? 'active' : ''}`}
+                        onClick={() => setComposerHelpOpen((v) => !v)}
+                        aria-label="Keyboard shortcuts"
+                      >
+                        <HelpCircle size={16} />
+                      </button>
+                      {composerHelpOpen && (
+                        <div className="composer-help-popover">
+                          <span><kbd>Enter</kbd> send</span>
+                          <span><kbd>Shift</kbd>+<kbd>Enter</kbd> new line</span>
+                          <span><kbd>Ctrl</kbd>+<kbd>V</kbd> paste image</span>
+                        </div>
                       )}
-                      <span style={{ marginLeft: 'auto', opacity: 0.6 }}>Max 15 MB · multi-file OK</span>
+
+                      <button
+                        type="button"
+                        className={`composer-tools-btn ${composerOptionsOpen ? 'active' : ''}`}
+                        onClick={() => setComposerOptionsOpen((v) => !v)}
+                        aria-label="Message options"
+                      >
+                        <Settings size={16} />
+                      </button>
+                      {composerOptionsOpen && (
+                        <div className="composer-options-popover">
+                          <label className="disappear-select-wrap" title="Disappearing messages">
+                            <span>Disappear:</span>
+                            <select
+                              className="disappear-select"
+                              value={disappearSeconds}
+                              onChange={(e) => setDisappearSeconds(Number(e.target.value) || 0)}
+                              aria-label="Disappearing message timer"
+                            >
+                              <option value={0}>Off</option>
+                              <option value={30}>30s</option>
+                              <option value={300}>5m</option>
+                              <option value={3600}>1h</option>
+                              <option value={86400}>24h</option>
+                              <option value={604800}>7d</option>
+                            </select>
+                          </label>
+                          <label className="disappear-select-wrap" title="Allow recipients to forward this message">
+                            <input
+                              type="checkbox"
+                              checked={allowForward}
+                              onChange={(e) => setAllowForward(e.target.checked)}
+                              aria-label="Allow forwarding"
+                            />
+                            <span>Allow forwarding</span>
+                          </label>
+                          {allowForward && (
+                            <label className="disappear-select-wrap" title="Optional forward expiry">
+                              <span>Fwd expires:</span>
+                              <select
+                                className="disappear-select"
+                                value={forwardUntilSeconds}
+                                onChange={(e) => setForwardUntilSeconds(Number(e.target.value) || 0)}
+                                aria-label="Forwarding expiry"
+                              >
+                                <option value={0}>Never</option>
+                                <option value={3600}>1h</option>
+                                <option value={86400}>24h</option>
+                                <option value={604800}>7d</option>
+                              </select>
+                            </label>
+                          )}
+                          <span style={{ fontSize: 11, opacity: 0.6, marginTop: 4 }}>Max 15 MB · multi-file OK</span>
+                        </div>
+                      )}
                     </div>
                     <form className="composer" onSubmit={handleSend} style={{ position: 'relative' }}>
                       <button

@@ -33,8 +33,8 @@ export default function ResetPassword() {
       <form className="auth-card" onSubmit={handleSubmit}>
         <h1>Reset password</h1>
         <p className="auth-subtitle">Choose a new login password. This does not change your encryption keys.</p>
-        {!token && <div className="auth-error">Missing reset token. Use the link from your email.</div>}
-        {error && <div className="auth-error">{error}</div>}
+        {!token && <div className="auth-error" role="alert" aria-live="polite">Missing reset token. Use the link from your email.</div>}
+        {error && <div className="auth-error" role="alert" aria-live="polite">{error}</div>}
         {ok && <div className="settings-ok">{ok}</div>}
         <label className="create-group-label">New password</label>
         <input

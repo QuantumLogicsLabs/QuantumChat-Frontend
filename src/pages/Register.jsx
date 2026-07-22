@@ -3,6 +3,7 @@ import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext.jsx';
 import ThemeSwitcher from '../components/ThemeSwitcher.jsx';
 import PasswordStrengthMeter from '../components/PasswordStrengthMeter.jsx';
+import { formatKeyFile, downloadKeyFile } from '../crypto/keyFile.js';
 
 function getFriendlyRegisterError(serverError, statusCode) {
   const msg = (serverError || '').toLowerCase();
@@ -69,6 +70,8 @@ export default function Register() {
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const [keyBackup, setKeyBackup] = useState(null);
+  const [keysDownloaded, setKeysDownloaded] = useState(false);
 
   // Dynamic page title
   useEffect(() => {
@@ -107,8 +110,8 @@ export default function Register() {
 
     setLoading(true);
     try {
-      await register(form);
-      navigate('/chat');
+      const keys = await register(form);
+      setKeyBackup(keys);
     } catch (err) {
       const serverMsg = err.response?.data?.error;
       const status = err.response?.status;
@@ -145,6 +148,7 @@ export default function Register() {
           </svg>
           <input
             id="register-username"
+            aria-label="Username"
             placeholder="Username"
             value={form.username}
             onChange={(e) => setForm({ ...form, username: e.target.value })}
@@ -161,6 +165,7 @@ export default function Register() {
           </svg>
           <input
             id="register-email"
+            aria-label="Email address"
             type="email"
             placeholder="Email address"
             value={form.email}
@@ -176,6 +181,7 @@ export default function Register() {
           </svg>
           <input
             id="register-password"
+            aria-label="Password"
             type={showPassword ? 'text' : 'password'}
             placeholder="Password"
             value={form.password}
@@ -188,7 +194,6 @@ export default function Register() {
             className="password-toggle auth-password-toggle"
             onClick={() => setShowPassword(!showPassword)}
             aria-label={showPassword ? 'Hide password' : 'Show password'}
-            tabIndex={-1}
           >
             {showPassword ? (
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -226,6 +231,49 @@ export default function Register() {
           Already have an account? <Link to="/login">Log in</Link>
         </p>
       </form>
+
+      {keyBackup && (
+        <div className="create-group-overlay">
+          <div className="auth-card" style={{ marginTop: '10vh' }}>
+            <div className="auth-brand">
+              <h2>Backup your encryption keys</h2>
+            </div>
+            <p className="auth-subtitle" style={{ color: 'var(--red-400)', fontWeight: 500 }}>
+              Warning: If you lose these keys, you will lose access to all your messages. 
+              They cannot be recovered by the server.
+            </p>
+            {!keysDownloaded ? (
+              <button
+                type="button"
+                onClick={() => {
+                  const content = formatKeyFile({
+                    username: keyBackup.user.username,
+                    email: keyBackup.user.email,
+                    secretKeys: keyBackup.keySet.map((k) => k.secretKey),
+                  });
+                  downloadKeyFile(content);
+                  setKeysDownloaded(true);
+                }}
+              >
+                Download keys.txt
+              </button>
+            ) : (
+              <button type="button" onClick={() => navigate('/chat')}>
+                Continue to chat
+              </button>
+            )}
+            {!keysDownloaded && (
+              <button
+                type="button"
+                style={{ backgroundColor: 'transparent', color: 'var(--text-muted)' }}
+                onClick={() => navigate('/chat')}
+              >
+                Skip for now
+              </button>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

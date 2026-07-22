@@ -39,8 +39,11 @@ export default function UserAvatar({ userId, name, hasAvatar, className = '', si
     };
   }, [userId, hasAvatar]);
 
+  const colorIndex = userId ? String(userId).split('').reduce((acc, char) => acc + char.charCodeAt(0), 0) % 10 : 0;
+  const colorClass = src ? '' : `avatar-color-${colorIndex}`;
+
   return (
-    <span className={`avatar user-avatar ${size} ${className}`.trim()}>
+    <span className={`avatar user-avatar ${size} ${colorClass} ${className}`.trim()} title={name}>
       {src ? <img src={src} alt="" /> : initials}
     </span>
   );

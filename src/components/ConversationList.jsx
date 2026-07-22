@@ -1,5 +1,6 @@
 import { motion } from 'framer-motion';
-import { Archive, Ban, BellOff, Users, UserPlus, VolumeX, X } from 'lucide-react';
+import { Archive, Ban, BellOff, MoreVertical, Users, UserPlus, VolumeX, X } from 'lucide-react';
+import UserAvatar from './UserAvatar.jsx';
 
 function isRecentlyActive(iso) {
   if (!iso) return false;
@@ -96,14 +97,21 @@ export default function ConversationList({
               transition={{ duration: 0.22, delay: Math.min(index * 0.02, 0.16) }}
               whileHover={{ y: -1 }}
             >
-              <span className={`avatar ${c.type === 'group' ? 'group-avatar' : ''}`}>
+              <span className={`avatar-container ${c.type === 'group' ? 'group' : ''}`}>
                 {c.type === 'group' ? (
-                  <Users size={18} strokeWidth={2} aria-hidden="true" />
+                  <span className="avatar group-avatar">
+                    <Users size={18} strokeWidth={2} aria-hidden="true" />
+                  </span>
                 ) : (
-                  <>
-                    {(c.title || '?').slice(0, 2).toUpperCase()}
+                  <span className="avatar-wrap" style={{ position: 'relative' }}>
+                    <UserAvatar
+                      userId={c.id}
+                      name={c.title}
+                      hasAvatar={Boolean(c.peer?.hasAvatar)}
+                      className="conv-row-avatar"
+                    />
                     {(c.online ?? isRecentlyActive(c.lastLoginAt)) && <span className="online-dot" />}
-                  </>
+                  </span>
                 )}
               </span>
               <span className="user-list-meta">
@@ -115,68 +123,38 @@ export default function ConversationList({
                     </span>
                   )}
                   {c.unread && <span className="unread-dot" aria-hidden="true" />}
+                  <span className="conv-row-time">{formatShortLastSeen(c.lastLoginAt)}</span>
                 </span>
-                <span className="user-list-lastseen">{c.subtitle || formatShortLastSeen(c.lastLoginAt)}</span>
+                <span className="user-list-lastseen">{c.subtitle}</span>
               </span>
               {(onHide || onBlock || onMute || onArchive) && (
-                <span className="user-list-actions">
-                  {onMute && (
-                    <button
-                      type="button"
-                      className="user-list-action-btn"
-                      title={c.muted ? 'Unmute' : 'Mute'}
-                      aria-label={`${c.muted ? 'Unmute' : 'Mute'} ${c.title}`}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onMute(c);
-                      }}
-                    >
-                      <VolumeX size={16} strokeWidth={2} aria-hidden="true" />
-                    </button>
-                  )}
-                  {onArchive && (
-                    <button
-                      type="button"
-                      className="user-list-action-btn"
-                      title={c.archived ? 'Unarchive' : 'Archive'}
-                      aria-label={`${c.archived ? 'Unarchive' : 'Archive'} ${c.title}`}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onArchive(c);
-                      }}
-                    >
-                      <Archive size={16} strokeWidth={2} aria-hidden="true" />
-                    </button>
-                  )}
-                  {c.type === 'dm' && onHide && (
-                    <button
-                      type="button"
-                      className="user-list-action-btn"
-                      title="Hide chat"
-                      aria-label={`Hide chat with ${c.title}`}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onHide(c.peer || c);
-                      }}
-                    >
-                      <X size={16} strokeWidth={2} aria-hidden="true" />
-                    </button>
-                  )}
-                  {c.type === 'dm' && onBlock && (
-                    <button
-                      type="button"
-                      className="user-list-action-btn danger"
-                      title="Block user"
-                      aria-label={`Block ${c.title}`}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onBlock(c.peer || c);
-                      }}
-                    >
-                      <Ban size={16} strokeWidth={2} aria-hidden="true" />
-                    </button>
-                  )}
-                </span>
+                <div className="conv-row-menu-wrap" onClick={(e) => e.stopPropagation()}>
+                  <button type="button" className="conv-row-menu" aria-label="Options">
+                    <MoreVertical size={16} />
+                  </button>
+                  <div className="conv-row-dropdown">
+                    {onMute && (
+                      <button type="button" onClick={() => onMute(c)}>
+                        <VolumeX size={14} /> {c.muted ? 'Unmute' : 'Mute'}
+                      </button>
+                    )}
+                    {onArchive && (
+                      <button type="button" onClick={() => onArchive(c)}>
+                        <Archive size={14} /> {c.archived ? 'Unarchive' : 'Archive'}
+                      </button>
+                    )}
+                    {c.type === 'dm' && onHide && (
+                      <button type="button" onClick={() => onHide(c.peer || c)}>
+                        <X size={14} /> Hide chat
+                      </button>
+                    )}
+                    {c.type === 'dm' && onBlock && (
+                      <button type="button" className="danger" onClick={() => onBlock(c.peer || c)}>
+                        <Ban size={14} /> Block user
+                      </button>
+                    )}
+                  </div>
+                </div>
               )}
             </motion.div>
           ))}
