@@ -40,8 +40,8 @@ export default function VerifyEmail() {
         <h1>Email verification</h1>
         {status === 'verifying' && <p className="auth-subtitle">Verifying…</p>}
         {status === 'ok' && <div className="settings-ok">Email verified. Redirecting…</div>}
-        {status === 'missing' && <div className="auth-error">Missing verification token.</div>}
-        {status === 'error' && <div className="auth-error">{error}</div>}
+        {status === 'missing' && <div className="auth-error" role="alert" aria-live="polite">Missing verification token.</div>}
+        {status === 'error' && <div className="auth-error" role="alert" aria-live="polite">{error}</div>}
         <p className="auth-switch">
           <Link to="/chat">Go to chat</Link> · <Link to="/login">Login</Link>
         </p>

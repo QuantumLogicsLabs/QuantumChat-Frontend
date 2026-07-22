@@ -57,6 +57,8 @@ import UserAvatar from '../components/UserAvatar.jsx';
 import MessageBubble from '../components/MessageBubble.jsx';
 import EmojiPicker from '../components/EmojiPicker.jsx';
 import ConfirmDialog from '../components/ConfirmDialog.jsx';
+import SettingsModal from '../components/SettingsModal.jsx';
+import StoriesRail from '../components/StoriesRail.jsx';
 import DateSeparator from '../components/DateSeparator.jsx';
 import MessageSearch from '../components/MessageSearch.jsx';
 import DragDropOverlay from '../components/DragDropOverlay.jsx';

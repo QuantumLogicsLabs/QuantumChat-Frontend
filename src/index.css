@@ -6931,3 +6931,41 @@ button.message-reply-preview:hover {
 .avatar-color-7 { background: #f43f5e; color: #fff; }
 .avatar-color-8 { background: #84cc16; color: #fff; }
 .avatar-color-9 { background: #14b8a6; color: #fff; }
+
+/* Password Strength Meter */
+.password-strength {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.password-strength-track {
+  width: 100%;
+  height: 4px;
+  background-color: var(--border-subtle);
+  border-radius: var(--radius-full);
+  overflow: hidden;
+}
+
+.password-strength-fill {
+  height: 100%;
+  border-radius: var(--radius-full);
+  transition: width var(--transition-normal), background-color var(--transition-normal);
+}
+
+.password-strength-weak { background-color: var(--danger); }
+.password-strength-fair { background-color: var(--warning-border); }
+.password-strength-good { background-color: var(--success); }
+.password-strength-strong { background-color: var(--success); filter: brightness(1.2); }
+
+.password-strength-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-align: right;
+}
+
+.password-strength-label-weak { color: var(--danger); }
+.password-strength-label-fair { color: var(--warning-border); }
+.password-strength-label-good { color: var(--success); }
+.password-strength-label-strong { color: var(--success); filter: brightness(1.2); }
