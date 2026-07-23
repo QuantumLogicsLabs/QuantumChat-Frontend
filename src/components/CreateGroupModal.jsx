@@ -1,4 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import useFocusTrap from '../hooks/useFocusTrap.js';
+
 
 export default function CreateGroupModal({ users, onClose, onCreate }) {
   const [name, setName] = useState('');
@@ -6,6 +8,10 @@ export default function CreateGroupModal({ users, onClose, onCreate }) {
   const [search, setSearch] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
+  const containerRef = useRef(null);
+
+  useFocusTrap(containerRef, true);
+
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -72,6 +78,7 @@ export default function CreateGroupModal({ users, onClose, onCreate }) {
     >
       <form
         className="create-group-modal"
+        ref={containerRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="create-group-title"

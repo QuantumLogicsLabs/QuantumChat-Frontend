@@ -336,13 +336,21 @@ export default function Chat() {
     (raw) => {
       const at = raw.createdAt || new Date().toISOString();
       const from = raw.from;
+      // Store a short preview of the last message for the sidebar
+      const preview = raw.text
+        ? String(raw.text).slice(0, 60) + (raw.text.length > 60 ? '…' : '')
+        : raw.kind === 'file'
+          ? '📎 Attachment'
+          : raw.kind === 'audio'
+            ? '🎵 Voice message'
+            : '';
       if (raw.group) {
         const key = conversationKeyForGroup(raw.group);
-        setConversationActivity(user.id, key, { at, from });
+        setConversationActivity(user.id, key, { at, from, preview });
       } else {
         const otherId = String(raw.from) === String(user.id) ? raw.to : raw.from;
         if (!otherId) return;
-        setConversationActivity(user.id, conversationKeyForUser(otherId), { at, from });
+        setConversationActivity(user.id, conversationKeyForUser(otherId), { at, from, preview });
       }
       bumpActivity();
     },
@@ -783,7 +791,7 @@ export default function Chat() {
         type: 'dm',
         id: u.id,
         title: u.displayName || u.username || 'Unknown user',
-        subtitle: null,
+        subtitle: activity?.preview || null,
         searchText: `${u.displayName || ''} ${u.username || ''} ${u.email || ''}`.toLowerCase(),
         lastLoginAt: u.lastLoginAt,
         unread,
@@ -806,9 +814,9 @@ export default function Chat() {
         type: 'group',
         id: g.id,
         title: g.name,
-        subtitle: desc
+        subtitle: activity?.preview || (desc
           ? desc.slice(0, 48) + (desc.length > 48 ? '…' : '')
-          : `${memberCount} member${memberCount === 1 ? '' : 's'}`,
+          : `${memberCount} member${memberCount === 1 ? '' : 's'}`),
         searchText: `${g.name || ''} ${g.description || ''}`.toLowerCase(),
         lastLoginAt: g.updatedAt,
         unread,

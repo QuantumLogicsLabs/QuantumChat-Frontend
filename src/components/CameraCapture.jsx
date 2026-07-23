@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import useFocusTrap from '../hooks/useFocusTrap.js';
 
 /**
  * Camera capture modal — takes a still photo and returns a File (JPEG).
@@ -6,8 +7,11 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 export default function CameraCapture({ open, onCapture, onClose }) {
   const videoRef = useRef(null);
   const streamRef = useRef(null);
+  const containerRef = useRef(null);
   const [error, setError] = useState('');
   const [ready, setReady] = useState(false);
+
+  useFocusTrap(containerRef, open);
 
   const stopCamera = useCallback(() => {
     streamRef.current?.getTracks().forEach((t) => t.stop());
@@ -81,7 +85,7 @@ export default function CameraCapture({ open, onCapture, onClose }) {
 
   return (
     <div className="camera-overlay" role="dialog" aria-modal="true" aria-label="Camera capture">
-      <div className="camera-panel">
+      <div className="camera-panel" ref={containerRef}>
         <div className="camera-header">
           <strong>Take a photo</strong>
           <button type="button" className="composer-context-close" onClick={onClose} aria-label="Close camera">

@@ -7034,3 +7034,31 @@ button.message-reply-preview:hover {
 .password-strength-label-fair { color: var(--warning-border); }
 .password-strength-label-good { color: var(--success); }
 .password-strength-label-strong { color: var(--success); filter: brightness(1.2); }
+
+/* Emoji Picker Search */
+.emoji-picker-search-wrap {
+  padding: 6px 8px 2px;
+}
+.emoji-picker-search {
+  width: 100%;
+  padding: 6px 10px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: 13px;
+  outline: none;
+  box-sizing: border-box;
+}
+.emoji-picker-search:focus {
+  border-color: var(--accent-primary);
+}
+.emoji-picker-search-results {
+  padding: 4px 8px;
+}
+.emoji-picker-empty {
+  text-align: center;
+  padding: 16px 8px;
+  color: var(--text-muted);
+  font-size: 13px;
+}

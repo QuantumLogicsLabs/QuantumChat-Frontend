@@ -22,6 +22,9 @@ export default function AIAssistantPanel({ conversation, messages, onClose, onIn
   });
   const [busy, setBusy] = useState(false);
   const abortRef = useRef(null);
+  const chunkBufferRef = useRef('');
+  const rafRef = useRef(null);
+
 
   const pickableMessages = messages.filter((message) => message.text).slice(-20);
 
@@ -94,9 +97,28 @@ export default function AIAssistantPanel({ conversation, messages, onClose, onIn
             ? { groupId: conversation.id }
             : { quantumChatPeerId: conversation?.id },
         signal: controller.signal,
-        onChunk: (chunk) => setAnswer((current) => current + chunk),
+        onChunk: (chunk) => {
+          // Buffer chunks and flush via rAF to prevent per-token re-renders
+          chunkBufferRef.current += chunk;
+          if (!rafRef.current) {
+            rafRef.current = requestAnimationFrame(() => {
+              setAnswer((current) => current + chunkBufferRef.current);
+              chunkBufferRef.current = '';
+              rafRef.current = null;
+            });
+          }
+        },
       });
     } finally {
+      // Flush any remaining buffered text
+      if (rafRef.current) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
+      if (chunkBufferRef.current) {
+        setAnswer((current) => current + chunkBufferRef.current);
+        chunkBufferRef.current = '';
+      }
       setBusy(false);
       abortRef.current = null;
     }

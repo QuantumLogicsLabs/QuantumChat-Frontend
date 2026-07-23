@@ -3,6 +3,8 @@ import { Camera, Copy, Link2, Shield, Trash2, UserMinus, UserPlus, X } from 'luc
 import client from '../api/client.js';
 import { getToken } from '../crypto/keyStorage.js';
 import { isGroupAdmin } from '../utils/groupPayload.js';
+import useFocusTrap from '../hooks/useFocusTrap.js';
+
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:5000';
 
@@ -32,6 +34,10 @@ export default function GroupSettingsModal({
   const [gallery, setGallery] = useState([]);
   const [galleryLoading, setGalleryLoading] = useState(false);
   const photoRef = useRef(null);
+  const containerRef = useRef(null);
+
+  useFocusTrap(containerRef, true);
+
 
   const admin = isGroupAdmin(group, currentUserId);
   const isOwner = String(group?.createdBy) === String(currentUserId);
@@ -246,6 +252,7 @@ export default function GroupSettingsModal({
     <div className="create-group-overlay" role="presentation" onClick={() => !busy && onClose?.()}>
       <div
         className="create-group-modal group-settings-modal"
+        ref={containerRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="group-settings-title"
