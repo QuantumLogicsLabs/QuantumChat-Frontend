@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
+import { useAuth } from '../context/AuthContext.jsx';
 import { AnimatePresence, motion } from 'framer-motion';
 import {
   ArrowRight,
@@ -58,8 +59,17 @@ const STEPS = [
 ];
 
 export default function Landing() {
+  const { user } = useAuth();
+  const navigate = useNavigate();
   const [scrolled, setScrolled] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+
+  // Redirect authenticated users straight to chat
+  useEffect(() => {
+    if (user) {
+      navigate('/chat', { replace: true });
+    }
+  }, [user, navigate]);
 
   useEffect(() => {
     const onScroll = () => setScrolled(window.scrollY > 16);

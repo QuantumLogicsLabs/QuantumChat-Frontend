@@ -29,9 +29,9 @@ export function AuthProvider({ children }) {
     const keySet = generateKeySet();
     const publicKeys = keySet.map((k) => k.publicKey);
     const { data } = await client.post('/auth/register', { username, email, password, publicKeys });
-    const { token, user: newUser } = data.data;
+    const { token, user: newUser, sessionId } = data.data;
     addKeySetToRing(newUser.id, keySet);
-    saveSession(token, newUser);
+    saveSession(token, newUser, sessionId);
     setUser(newUser);
     connectSocket();
     // The caller (Register.jsx) needs the raw secret keys once, right here,
