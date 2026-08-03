@@ -303,6 +303,8 @@ export default function AttachmentBubble({
           className="attachment-preview"
           src={objectUrl}
           alt={attachment.filename}
+          loading="lazy"
+          decoding="async"
           onClick={() => onImagePreview?.(attachmentId, objectUrl, attachment.filename)}
           role="button"
           aria-label="Open image gallery"

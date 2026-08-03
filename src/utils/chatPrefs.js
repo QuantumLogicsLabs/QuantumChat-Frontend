@@ -1,5 +1,7 @@
 const MUTE_PREFIX = 'qc_muted_chats_';
 const ARCHIVE_PREFIX = 'qc_archived_chats_';
+const INFO_PANEL_KEY = 'qc_info_panel_open';
+const LAST_REACTION_KEY = 'qc_last_quick_reaction';
 
 function readList(prefix, userId) {
   if (!userId) return [];
@@ -69,4 +71,38 @@ export function unarchiveChat(userId, conversationKey) {
 export function toggleArchiveChat(userId, conversationKey) {
   if (isChatArchived(userId, conversationKey)) return unarchiveChat(userId, conversationKey);
   return archiveChat(userId, conversationKey);
+}
+
+export function getInfoPanelOpen() {
+  try {
+    return localStorage.getItem(INFO_PANEL_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+export function setInfoPanelOpen(open) {
+  try {
+    localStorage.setItem(INFO_PANEL_KEY, open ? '1' : '0');
+  } catch {
+    /* ignore */
+  }
+  return Boolean(open);
+}
+
+export function getLastQuickReaction() {
+  try {
+    return localStorage.getItem(LAST_REACTION_KEY) || '❤️';
+  } catch {
+    return '❤️';
+  }
+}
+
+export function setLastQuickReaction(emoji) {
+  try {
+    if (emoji) localStorage.setItem(LAST_REACTION_KEY, String(emoji));
+  } catch {
+    /* ignore */
+  }
+  return emoji;
 }

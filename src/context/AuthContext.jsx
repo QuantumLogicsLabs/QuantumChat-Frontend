@@ -88,7 +88,11 @@ export function AuthProvider({ children }) {
       }
 
       const { data } = await client.post('/auth/register', { username, email, password, publicKeys });
+Quantum-Frontend-Intern
       const { token, user: newUser, sessionId } = data.data;
+
+      const { token, user: newUser } = data.data;
+ main
 
       // CRITICAL: persist private keys before anything else that could navigate away.
       try {
@@ -99,6 +103,7 @@ export function AuthProvider({ children }) {
         );
       }
 
+ Quantum-Frontend-Intern
       saveSession(token, newUser, sessionId);
       setUser(newUser);
       recomputeKeyringSync(newUser);
@@ -106,6 +111,12 @@ export function AuthProvider({ children }) {
       // The caller (Register.jsx) needs the raw secret keys once, right here,
       // to offer a backup download — they're never retrievable from the
       // server or exposed anywhere else afterward.
+
+      saveSession(token, newUser);
+      setUser(newUser);
+      recomputeKeyringSync(newUser);
+      connectSocket();
+ main
       return { user: newUser, keySet };
     },
     [recomputeKeyringSync]

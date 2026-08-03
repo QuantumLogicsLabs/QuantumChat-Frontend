@@ -18,6 +18,8 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - name: Crypto unit tests (E2E seal/unseal invariants)
+        run: npm run test:crypto
       - run: npm run build
       - name: npm audit (critical)
         run: npm audit --omit=dev --audit-level=critical

@@ -16,24 +16,45 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
       - name: Forbid plaintext WebRTC signaling emits
         run: |
           set -euo pipefail
-          # Call socket emits must carry sealed envelopes, not raw SDP/ICE.
+          # Call/meeting socket emits must carry sealed envelopes, not raw SDP/ICE.
           if grep -RInE --include='*.{js,jsx,ts,tsx}' \
-            "emit\(['\"]call:(offer|answer|ice|invite|accept|reject|hangup)['\"].*\b(sdp|candidate)\b" \
+            "emit\(['\"](call|meeting):(offer|answer|ice|invite|accept|reject|hangup|join|leave|end)['\"].*\b(sdp|candidate)\b" \
             src; then
-            echo "::error::Raw SDP/ICE fields must not appear on call:* emits — use X5 envelopes."
+            echo "::error::Raw SDP/ICE fields must not appear on call:*/meeting:* emits — use X5 envelopes."
             exit 1
           fi
-          echo "OK: no plaintext call signaling emits detected"
+          echo "OK: no plaintext call/meeting signaling emits detected"
 
       - name: Require sealed call helper usage
         run: |
           set -euo pipefail
+          test -f src/utils/callSignalTransport.js
+          grep -q "sealForPeer\|emitSealedEnvelope" src/utils/callSignalTransport.js
           test -f src/hooks/useWebRTCCall.js
-          grep -q "sealForPeer\|envelope" src/hooks/useWebRTCCall.js
-          echo "OK: useWebRTCCall uses sealed envelopes"
+          grep -q "emitSealedEnvelope\|envelope" src/hooks/useWebRTCCall.js
+          test -f src/hooks/useMeetingCall.js
+          grep -q "emitSealedEnvelope\|envelope" src/hooks/useMeetingCall.js
+          echo "OK: useWebRTCCall and useMeetingCall use sealed envelopes"
+
+      - name: Require sealed DM payload helper
+        run: |
+          set -euo pipefail
+          test -f src/crypto/sealedPayload.js
+          grep -q "buildSealedDmBody" src/crypto/sealedPayload.js
+          grep -q "FORBIDDEN_PLAINTEXT_KEYS" src/crypto/sealedPayload.js
+          echo "OK: sealedPayload.js forbids plaintext chat fields"
 
       - name: Forbid private key console logging
         run: |
@@ -45,3 +66,17 @@ jobs:
             exit 1
           fi
           echo "OK: no private-key console logging detected"
+
+      - name: Forbid logging plaintext message drafts in crypto modules
+        run: |
+          set -euo pipefail
+          if grep -RInE --include='*.{js,jsx,ts,tsx}' \
+            "console\.(log|debug|info|warn|error)\([^)]*(plaintext|draft|forRecipient)" \
+            src/crypto; then
+            echo "::error::Do not log plaintext or envelope material from crypto modules."
+            exit 1
+          fi
+          echo "OK: crypto modules do not log plaintext drafts"
+
+      - name: Run frontend crypto unit tests
+        run: npm run test:crypto

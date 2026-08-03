@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, useMemo } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, useMemo, memo } from 'react';
 import { createPortal } from 'react-dom';
 import { motion } from 'framer-motion';
 import {
@@ -15,6 +15,7 @@ import {
   Star,
   Trash2,
   Clock,
+  Users,
   Video,
 } from 'lucide-react';
 import AttachmentBubble from './AttachmentBubble.jsx';
@@ -63,14 +64,18 @@ function placePopover(anchorRect, popoverEl, { preferMine }) {
   return { top, left, placement };
 }
 
-function formatRelativeTime(iso) {
-  const diff = Date.now() - new Date(iso).getTime();
-  const mins = Math.floor(diff / 60000);
-  if (mins < 1) return 'just now';
-  if (mins < 60) return `${mins}m ago`;
-  const hours = Math.floor(mins / 60);
-  if (hours < 24) return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  return new Date(iso).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+function formatMessageTime(iso) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  // WhatsApp-style 12-hour clock with a non-breaking space so "am"/"pm" never wraps alone
+  return d
+    .toLocaleTimeString('en-US', {
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+    })
+    .toLowerCase()
+    .replace(/\s+(am|pm)$/, '\u00a0$1');
 }
 
 function formatVoiceTimer(seconds) {
@@ -111,7 +116,7 @@ function ReadReceipt({ status }) {
   );
 }
 
-export default function MessageBubble({
+function MessageBubble({
   message,
   isMine,
   currentUserId,
@@ -186,6 +191,17 @@ const storyReplyPayload = useMemo(() => {
     return null;
   }, [message.text]);
 
+  const meetingMeta = useMemo(() => {
+    if (!message.text) return null;
+    try {
+      const obj = JSON.parse(message.text);
+      if (obj && obj.__type === 'meeting') return obj;
+    } catch (e) {
+      return null;
+    }
+    return null;
+  }, [message.text]);
+
   const receiptStatus = useMemo(() => {
     if (!isMine) return null;
     if (message._status === 'sending') return 'sending';
@@ -194,8 +210,28 @@ const storyReplyPayload = useMemo(() => {
     return 'sent';
   }, [isMine, message.readAt, message.deliveredAt, message._status, showReadReceipts]);
 
-  const relativeTime = useMemo(() => formatRelativeTime(message.createdAt), [message.createdAt]);
+  const relativeTime = useMemo(() => formatMessageTime(message.createdAt), [message.createdAt]);
   const fullTime = useMemo(() => new Date(message.createdAt).toLocaleString(), [message.createdAt]);
+
+  // Rendered twice: once as an invisible inline spacer that reserves room on the
+  // last line of text, and once absolutely positioned on top of that space. This
+  // is what lets the timestamp sit on the text's last line (and makes short
+  // bubbles wide enough to hold it) without relying on floats.
+  const timeMeta = (
+    <>
+      {message.expiresAt ? (
+        <span
+          className="message-expiry-badge"
+          title={`Disappears ${new Date(message.expiresAt).toLocaleString()}`}
+        >
+          <Clock size={11} strokeWidth={2.5} aria-hidden="true" />
+        </span>
+      ) : null}
+      {relativeTime}
+      {message.editedAt ? <span className="message-edited"> · edited</span> : null}
+      {isMine && <ReadReceipt status={receiptStatus} />}
+    </>
+  );
 
   function closeAll() {
     setMenuOpen(false);
@@ -385,9 +421,9 @@ const storyReplyPayload = useMemo(() => {
       <motion.div
         ref={rootRef}
         className={`message-row ${isMine ? 'mine' : 'theirs'} ${grouped ? 'grouped' : ''} ${anyPopover ? 'popover-open' : ''} ${pinned ? 'pinned' : ''} ${starred ? 'starred' : ''}`}
-        initial={grouped ? false : { opacity: 0, y: 10 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
+        initial={false}
+        animate={{ opacity: 1 }}
+        transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }}
       >
         <div className={`message-bubble-wrap ${isMine ? 'mine' : 'theirs'}`}>
           <div className={`message-bubble ${isMine ? 'mine' : 'theirs'} ${grouped ? 'grouped' : ''}${message.expiresAt ? ' has-expiry' : ''}${isStoryReaction ? ' story-reaction-pill' : ''}`}>
@@ -445,7 +481,18 @@ const storyReplyPayload = useMemo(() => {
                       : 'Missed call'}
                   </div>
                 </div>
-                <div className="call-message-time">{relativeTime}</div>
+              </div>
+            ) : meetingMeta ? (
+              <div className="call-message">
+                <div className="call-message-icon"><Users size={20} /></div>
+                <div className="call-message-body">
+                  <div className="call-message-title">{meetingMeta.video ? 'Video meeting' : 'Voice meeting'}</div>
+                  <div className="call-message-sub">
+                    {meetingMeta.answered
+                      ? `${meetingMeta.participantCount || 1} participants · ${formatVoiceTimer(meetingMeta.durationSeconds || 0)}`
+                      : 'No one joined'}
+                  </div>
+                </div>
               </div>
             ) : message.group && message.text != null ? (
               <GroupMessageContent
@@ -498,23 +545,14 @@ const storyReplyPayload = useMemo(() => {
                 <div>{storyReplyPayload.text}</div>
               </div>
             ) : hasTextContent ? (
-              message.text
+              <span className="message-text">{message.text}</span>
             ) : isDecryptionFail ? (
               <em>[Unable to decrypt message]</em>
             ) : null}
-            <div className={`message-time ${isStoryReaction ? 'story-reaction-time' : ''}`} title={fullTime}>
-              {message.expiresAt ? (
-                <span
-                  className="message-expiry-badge"
-                  title={`Disappears ${new Date(message.expiresAt).toLocaleString()}`}
-                >
-                  <Clock size={11} strokeWidth={2.5} aria-hidden="true" />
-                </span>
-              ) : null}
-              {relativeTime}
-              {message.editedAt ? <span className="message-edited"> · edited</span> : null}
-              {isMine && <ReadReceipt status={receiptStatus} />}
-            </div>
+            <span className="message-time-spacer" aria-hidden="true">{timeMeta}</span>
+            <span className={`message-time ${isStoryReaction ? 'story-reaction-time' : ''}`} title={fullTime}>
+              {timeMeta}
+            </span>
           </div>
 
           <div className="message-action-cluster">
@@ -575,3 +613,5 @@ const storyReplyPayload = useMemo(() => {
     </>
   );
 }
+
+export default memo(MessageBubble);

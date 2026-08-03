@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
-import { Archive, Ban, BellOff, MoreVertical, Users, UserPlus, VolumeX, X } from 'lucide-react';
+import { Archive, Ban, BellOff, Check, Mail, MoreVertical, Phone, Search, Users, UserPlus, UserX, VolumeX, X } from 'lucide-react';
 import client from '../api/client.js';
 import UserAvatar from './UserAvatar.jsx';
+import { createPortal } from 'react-dom';
 
 function isRecentlyActive(iso) {
   if (!iso) return false;
@@ -25,6 +26,7 @@ const FILTERS = [
   { id: 'all', label: 'All' },
   { id: 'unread', label: 'Unread' },
   { id: 'groups', label: 'Groups' },
+  { id: 'friends', label: 'Friends' },
   { id: 'discover', label: 'Discover' },
   { id: 'archived', label: 'Archived' },
 ];
@@ -43,11 +45,55 @@ export default function ConversationList({
   onArchive,
   loading,
   searchQuery = '',
+  friendCandidates = [],
+  friendCandidatesLoading = false,
+  incomingRequests = [],
+  myFriends = [],
+  myFriendsLoading = false,
+  contactQuery = '',
+  onContactQueryChange,
+  contactLookupResult = null,
+  contactLookupLoading = false,
+  contactLookupError = '',
+  onLookupContact,
+  onSendFriendRequest,
+  onCancelFriendRequest,
+  onAcceptFriendRequest,
+  onDeclineFriendRequest,
+  onOpenFriend,
 }) {
   const [discoverItems, setDiscoverItems] = useState([]);
   const [discoverLoading, setDiscoverLoading] = useState(false);
   const [discoverError, setDiscoverError] = useState('');
   const [joiningId, setJoiningId] = useState(null);
+  const [openMenuKey, setOpenMenuKey] = useState(null);
+  const panelRef = useRef(null);
+const [menuPos, setMenuPos] = useState(null);
+  useEffect(() => {
+    if (!openMenuKey) return undefined;
+
+    function closeMenu(e) {
+if (!e.target.closest('.conv-row-menu-wrap') && !e.target.closest('.conv-row-dropdown')) {
+    setOpenMenuKey(null);
+    setMenuPos(null);
+  }
+}
+    function closeOnEscape(e) {
+      if (e.key === 'Escape') setOpenMenuKey(null);
+    }
+
+    document.addEventListener('pointerdown', closeMenu);
+    window.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('pointerdown', closeMenu);
+      window.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [openMenuKey]);
+
+  function runMenuAction(action) {
+    setOpenMenuKey(null);
+    action?.();
+  }
 
   const loadDiscover = useCallback(async (q) => {
     setDiscoverLoading(true);
@@ -91,7 +137,7 @@ export default function ConversationList({
   }
 
   return (
-    <div className="conversation-panel">
+    <div className="conversation-panel" ref={panelRef}>
       <div className="sidebar-filters" role="tablist" aria-label="Conversation filters">
         {FILTERS.map((f) => (
           <button
@@ -179,6 +225,303 @@ export default function ConversationList({
             ))
           )}
         </div>
+      ) : filter === 'friends' ? (
+        <div className="user-list friends-list">
+          <div className="friend-requests-incoming">
+            <p className="friend-requests-heading">
+              Requests
+              {incomingRequests.length > 0 ? (
+                <span className="friend-section-count">{incomingRequests.length}</span>
+              ) : null}
+            </p>
+            {incomingRequests.length === 0 ? (
+              <div className="friends-empty-card" role="status">
+                <UserPlus size={20} strokeWidth={1.75} aria-hidden="true" />
+                <p className="friends-empty-title">No pending requests</p>
+                <p className="friends-empty-copy">When someone wants to connect, their request shows up here.</p>
+              </div>
+            ) : (
+              incomingRequests.map((r) => (
+                <div key={r.id} className="user-list-item friend-request-item">
+                  <UserAvatar
+                    userId={r.user.id}
+                    name={r.user.displayName || r.user.username}
+                    hasAvatar={Boolean(r.user.hasAvatar)}
+                  />
+                  <span className="user-list-meta">
+                    <span className="user-list-name">{r.user.displayName || r.user.username}</span>
+                    <span className="user-list-lastseen">@{r.user.username}</span>
+                  </span>
+                  <div className="friend-request-actions">
+                    <button
+                      type="button"
+                      className="friend-action-btn accept"
+                      aria-label={`Accept request from ${r.user.displayName || r.user.username}`}
+                      onClick={() => onAcceptFriendRequest?.(r.id)}
+                    >
+                      <Check size={15} strokeWidth={2.5} />
+                    </button>
+                    <button
+                      type="button"
+                      className="friend-action-btn decline"
+                      aria-label={`Decline request from ${r.user.displayName || r.user.username}`}
+                      onClick={() => onDeclineFriendRequest?.(r.id)}
+                    >
+                      <X size={15} strokeWidth={2.5} />
+                    </button>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+
+          <div className="friend-connections">
+            <p className="friend-requests-heading">
+              Your friends
+              {myFriends.length > 0 ? (
+                <span className="friend-section-count">{myFriends.length}</span>
+              ) : null}
+            </p>
+            {myFriendsLoading ? (
+              [1, 2].map((i) => (
+                <div key={i} className="user-list-item friend-skeleton-item" style={{ pointerEvents: 'none' }}>
+                  <div className="skeleton skeleton-avatar" />
+                  <div className="skeleton-user-info">
+                    <div className="skeleton skeleton-line short" />
+                    <div className="skeleton skeleton-line medium" style={{ marginTop: '4px' }} />
+                  </div>
+                </div>
+              ))
+            ) : myFriends.length === 0 ? (
+              <div className="friends-empty-card" role="status">
+                <Users size={20} strokeWidth={1.75} aria-hidden="true" />
+                <p className="friends-empty-title">No friends yet</p>
+                <p className="friends-empty-copy">
+                  Accept a request above, or add someone from People below.
+                </p>
+              </div>
+            ) : (
+              myFriends
+                .filter((u) => {
+                  const q = searchQuery.trim().toLowerCase();
+                  if (!q) return true;
+                  return `${u.displayName || ''} ${u.username || ''}`.toLowerCase().includes(q);
+                })
+                .map((u, index) => (
+                  <motion.div
+                    key={u.id}
+                    className="user-list-item friend-connection-item"
+                    role="button"
+                    tabIndex={0}
+                    initial={{ opacity: 0, y: 8 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 0.22, delay: Math.min(index * 0.02, 0.16) }}
+                    onClick={() => onOpenFriend?.(u)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        onOpenFriend?.(u);
+                      }
+                    }}
+                  >
+                    <UserAvatar
+                      userId={u.id}
+                      name={u.displayName || u.username}
+                      hasAvatar={Boolean(u.hasAvatar)}
+                    />
+                    <span className="user-list-meta">
+                      <span className="user-list-name">{u.displayName || u.username}</span>
+                      <span className="user-list-lastseen">@{u.username}</span>
+                    </span>
+                    <span className="friend-chat-hint">Chat</span>
+                  </motion.div>
+                ))
+            )}
+          </div>
+
+          <div className="friend-contact-lookup">
+            <p className="friend-requests-heading">
+              <Mail size={14} strokeWidth={2.2} aria-hidden="true" />
+              Find via phone or email
+            </p>
+            <form
+              className="friend-contact-form"
+              onSubmit={(e) => {
+                e.preventDefault();
+                onLookupContact?.();
+              }}
+            >
+              <div className="friend-contact-input-wrap">
+                <Phone size={15} strokeWidth={2} aria-hidden="true" className="friend-contact-input-icon" />
+                <input
+                  type="text"
+                  className="friend-contact-input"
+                  value={contactQuery}
+                  onChange={(e) => onContactQueryChange?.(e.target.value)}
+                  placeholder="Email or phone number"
+                  autoComplete="off"
+                  inputMode="email"
+                  aria-label="Find friend by email or phone"
+                />
+              </div>
+              <button
+                type="submit"
+                className="friend-contact-submit"
+                disabled={contactLookupLoading || !contactQuery.trim()}
+              >
+                {contactLookupLoading ? '…' : <Search size={15} strokeWidth={2.4} aria-hidden="true" />}
+                <span>Find</span>
+              </button>
+            </form>
+            {contactLookupError ? (
+              <p className="friend-contact-error" role="alert">{contactLookupError}</p>
+            ) : null}
+            {contactLookupResult ? (
+              <motion.div
+                className="user-list-item friend-candidate-item"
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.2 }}
+              >
+                <UserAvatar
+                  userId={contactLookupResult.id}
+                  name={contactLookupResult.displayName || contactLookupResult.username}
+                  hasAvatar={Boolean(contactLookupResult.hasAvatar)}
+                />
+                <span className="user-list-meta">
+                  <span className="user-list-name">
+                    {contactLookupResult.displayName || contactLookupResult.username}
+                  </span>
+                  <span className="user-list-lastseen">
+                    @{contactLookupResult.username}
+                    {contactLookupResult.matchedBy
+                      ? ` · matched by ${contactLookupResult.matchedBy}`
+                      : ''}
+                  </span>
+                </span>
+                {contactLookupResult.requestStatus === 'friends' ? (
+                  <button
+                    type="button"
+                    className="friend-action-btn add"
+                    onClick={() => onOpenFriend?.(contactLookupResult)}
+                  >
+                    Chat
+                  </button>
+                ) : contactLookupResult.requestStatus === 'pending_sent' ? (
+                  <button
+                    type="button"
+                    className="friend-action-btn cancel"
+                    onClick={() => onCancelFriendRequest?.(contactLookupResult.requestId)}
+                  >
+                    Cancel
+                  </button>
+                ) : contactLookupResult.requestStatus === 'pending_received' ? (
+                  <div className="friend-request-actions">
+                    <button
+                      type="button"
+                      className="friend-action-btn accept"
+                      onClick={() => onAcceptFriendRequest?.(contactLookupResult.requestId)}
+                    >
+                      <Check size={15} strokeWidth={2.5} />
+                    </button>
+                    <button
+                      type="button"
+                      className="friend-action-btn decline"
+                      onClick={() => onDeclineFriendRequest?.(contactLookupResult.requestId)}
+                    >
+                      <X size={15} strokeWidth={2.5} />
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    className="friend-action-btn add"
+                    onClick={() => onSendFriendRequest?.(contactLookupResult.id)}
+                  >
+                    Add
+                  </button>
+                )}
+              </motion.div>
+            ) : null}
+          </div>
+
+          <p className="friend-requests-heading">People</p>
+          {friendCandidatesLoading ? (
+            [1, 2, 3].map((i) => (
+              <div key={i} className="user-list-item friend-skeleton-item" style={{ pointerEvents: 'none' }}>
+                <div className="skeleton skeleton-avatar" />
+                <div className="skeleton-user-info">
+                  <div className="skeleton skeleton-line short" />
+                  <div className="skeleton skeleton-line medium" style={{ marginTop: '4px' }} />
+                </div>
+              </div>
+            ))
+          ) : friendCandidates.length === 0 ? (
+            <div className="friends-empty-card" role="status">
+              <Users size={20} strokeWidth={1.75} aria-hidden="true" />
+              <p className="friends-empty-title">
+                {searchQuery.trim() ? 'No matches' : 'No one new right now'}
+              </p>
+              <p className="friends-empty-copy">
+                {searchQuery.trim()
+                  ? 'Try a different name or username.'
+                  : 'Search above to find people, or wait for new accounts to appear.'}
+              </p>
+            </div>
+          ) : (
+            friendCandidates.map((u, index) => (
+              <motion.div
+                key={u.id}
+                className="user-list-item friend-candidate-item"
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.22, delay: Math.min(index * 0.02, 0.16) }}
+              >
+                <UserAvatar userId={u.id} name={u.displayName || u.username} hasAvatar={Boolean(u.hasAvatar)} />
+                <span className="user-list-meta">
+                  <span className="user-list-name">{u.displayName || u.username}</span>
+                  <span className="user-list-lastseen">@{u.username}</span>
+                </span>
+                {u.requestStatus === 'pending_sent' ? (
+                  <button
+                    type="button"
+                    className="friend-action-btn cancel"
+                    onClick={() => onCancelFriendRequest?.(u.requestId)}
+                  >
+                    Cancel
+                  </button>
+                ) : u.requestStatus === 'pending_received' ? (
+                  <div className="friend-request-actions">
+                    <button
+                      type="button"
+                      className="friend-action-btn accept"
+                      aria-label={`Accept request from ${u.displayName || u.username}`}
+                      onClick={() => onAcceptFriendRequest?.(u.requestId)}
+                    >
+                      <Check size={15} strokeWidth={2.5} />
+                    </button>
+                    <button
+                      type="button"
+                      className="friend-action-btn decline"
+                      aria-label={`Decline request from ${u.displayName || u.username}`}
+                      onClick={() => onDeclineFriendRequest?.(u.requestId)}
+                    >
+                      <UserX size={15} strokeWidth={2.5} />
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    className="friend-action-btn add"
+                    onClick={() => onSendFriendRequest?.(u.id)}
+                  >
+                    Add
+                  </button>
+                )}
+              </motion.div>
+            ))
+          )}
+        </div>
       ) : loading ? (
         <div className="user-list">
           {[1, 2, 3, 4].map((i) => (
@@ -196,10 +539,14 @@ export default function ConversationList({
           {conversations.map((c, index) => (
             <motion.div
               key={c.key}
-              className={`user-list-item ${c.key === selectedKey ? 'active' : ''} ${c.unread ? 'unread' : ''}`}
+              className={`user-list-item ${c.key === selectedKey ? 'active' : ''} ${c.unread ? 'unread' : ''} ${openMenuKey === c.key ? 'menu-open' : ''}`}
               role="button"
               tabIndex={0}
-              onClick={() => onSelect(c)}
+              onClick={() => {
+                setOpenMenuKey(null);
+                 setMenuPos(null);
+                onSelect(c);
+              }}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' || e.key === ' ') {
                   e.preventDefault();
@@ -244,31 +591,61 @@ export default function ConversationList({
               </span>
               {(onHide || onBlock || onMute || onArchive) && (
                 <div className="conv-row-menu-wrap" onClick={(e) => e.stopPropagation()}>
-                  <button type="button" className="conv-row-menu" aria-label="Options">
+                  <button
+                    type="button"
+                    className={`conv-row-menu ${openMenuKey === c.key ? 'open' : ''}`}
+                    aria-label={`Options for ${c.title}`}
+                    aria-haspopup="menu"
+                    aria-expanded={openMenuKey === c.key}
+                   onClick={(e) => {
+  if (openMenuKey === c.key) {
+    setOpenMenuKey(null);
+    setMenuPos(null);
+    return;
+  }
+  const rect = e.currentTarget.getBoundingClientRect();
+  setMenuPos({ top: rect.bottom + 8, right: window.innerWidth - rect.right });
+  setOpenMenuKey(c.key);
+}}
+                  >
                     <MoreVertical size={16} />
                   </button>
-                  <div className="conv-row-dropdown">
-                    {onMute && (
-                      <button type="button" onClick={() => onMute(c)}>
-                        <VolumeX size={14} /> {c.muted ? 'Unmute' : 'Mute'}
-                      </button>
-                    )}
-                    {onArchive && (
-                      <button type="button" onClick={() => onArchive(c)}>
-                        <Archive size={14} /> {c.archived ? 'Unarchive' : 'Archive'}
-                      </button>
-                    )}
-                    {c.type === 'dm' && onHide && (
-                      <button type="button" onClick={() => onHide(c.peer || c)}>
-                        <X size={14} /> Hide chat
-                      </button>
-                    )}
-                    {c.type === 'dm' && onBlock && (
-                      <button type="button" className="danger" onClick={() => onBlock(c.peer || c)}>
-                        <Ban size={14} /> Block user
-                      </button>
-                    )}
-                  </div>
+                  {openMenuKey === c.key && menuPos && createPortal(
+  <div
+    className="conv-row-dropdown open"
+    role="menu"
+    aria-label={`Conversation options for ${c.title}`}
+    style={{ position: 'fixed', top: menuPos.top, right: menuPos.right, left: 'auto' }}
+  >
+    <div className="conv-row-dropdown-title">Conversation options</div>
+    {onMute && (
+      <button type="button" role="menuitem" onClick={() => runMenuAction(() => onMute(c))}>
+        <VolumeX size={14} /> {c.muted ? 'Unmute' : 'Mute'}
+      </button>
+    )}
+    {onArchive && (
+      <button type="button" role="menuitem" onClick={() => runMenuAction(() => onArchive(c))}>
+        <Archive size={14} /> {c.archived ? 'Unarchive' : 'Archive'}
+      </button>
+    )}
+    {c.type === 'dm' && onHide && (
+      <button type="button" role="menuitem" onClick={() => runMenuAction(() => onHide(c.peer || c))}>
+        <X size={14} /> Hide chat
+      </button>
+    )}
+    {c.type === 'dm' && onBlock && (
+      <button
+        type="button"
+        role="menuitem"
+        className="danger"
+        onClick={() => runMenuAction(() => onBlock(c.peer || c))}
+      >
+        <Ban size={14} /> Block user
+      </button>
+    )}
+  </div>,
+  document.body
+)}
                 </div>
               )}
             </motion.div>

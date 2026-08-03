@@ -5,10 +5,9 @@ const SESSION_ID_KEY = 'qc_session_id';
 
 // Each user's keyring is an append-only list of every X25519 keypair this
 // device has ever held for them: [{ publicKey, secretKey, createdAt }, ...].
-// Keys rotate every 30 minutes, but a message can only ever be decrypted
-// with the exact keypair version that was current when it was sent — so old
-// keys must be kept, not discarded, for history to stay readable. Nothing
-// here ever leaves localStorage.
+// The server advertises one fixed 5-key pool per account (set at register or
+// via regenerateKeys); older pools stay in the ring so history sealed to
+// prior keys remains decryptable. Nothing here ever leaves localStorage.
 function keyringKey(userId) {
   return KEYRING_PREFIX + userId;
 }
@@ -62,18 +61,41 @@ export function hasKeyring(userId) {
 
 /**
  * True when this device already holds secret keys for every currently
- * published public key — i.e. chat can unlock without re-importing keys.txt.
+ * published public key — i.e. chat/stories can unlock without re-importing
+ * keys.txt or regenerating.
  */
-export function keyringMatchesPublishedKeys(userId, publicKeys) {
-  const needed = (publicKeys || []).map((k) => String(k).toLowerCase()).filter(Boolean);
-  if (!needed.length) return false;
-  const ringPubs = new Set(getKeyring(userId).map((k) => String(k.publicKey).toLowerCase()));
-  return needed.every((pk) => ringPubs.has(pk));
+export function keyringMatchesPublishedKeys(userId, serverPublicKeys) {
+  const serverKeys = (serverPublicKeys || []).map((k) => String(k).toLowerCase()).filter(Boolean);
+  if (!serverKeys.length) return false;
+  return serverKeys.every((pub) => Boolean(findSecretKeyForPublicKey(userId, pub)));
+}
+
+/**
+ * Compare server-advertised public keys with secrets held locally, returning
+ * a detailed status ('synced' | 'partial' | 'mismatch' | 'unknown') plus
+ * which server keys are missing locally — used to drive the sync banner/UI.
+ */
+export function getKeyringSyncStatus(userId, serverPublicKeys) {
+  const serverKeys = (serverPublicKeys || []).map((k) => String(k).toLowerCase()).filter(Boolean);
+  if (!serverKeys.length) {
+    return { status: 'unknown', missingOnLocal: [], serverKeys: [], localMatchCount: 0 };
+  }
+  const missingOnLocal = serverKeys.filter((pub) => !findSecretKeyForPublicKey(userId, pub));
+  const localMatchCount = serverKeys.length - missingOnLocal.length;
+  if (localMatchCount === 0) {
+    return { status: 'mismatch', missingOnLocal, serverKeys, localMatchCount };
+  }
+  if (missingOnLocal.length > 0) {
+    return { status: 'partial', missingOnLocal, serverKeys, localMatchCount };
+  }
+  return { status: 'synced', missingOnLocal: [], serverKeys, localMatchCount };
 }
 
 // Wipes this device's copy of the user's private keys. Used when switching
 // accounts on the same browser, or when local keys no longer match the
-// account's published pool (e.g. regenerated on another device).
+// account's published pool (e.g. regenerated on another device). Not called
+// on logout — encryption keys stay in localStorage so the next login on this
+// browser can chat without re-importing keys.txt.
 export function clearKeyring(userId) {
   localStorage.removeItem(keyringKey(userId));
 }
