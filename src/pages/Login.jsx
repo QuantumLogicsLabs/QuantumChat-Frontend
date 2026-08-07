@@ -57,7 +57,7 @@ function getFriendlyLoginError(serverError, statusCode) {
 }
 
 export default function Login() {
-  const { login, verify2fa } = useAuth();
+  const { login, verify2fa, user } = useAuth();
   const navigate = useNavigate();
   const [form, setForm] = useState({ email: '', password: '' });
   const [error, setError] = useState(null);
@@ -65,6 +65,12 @@ export default function Login() {
   const [showPassword, setShowPassword] = useState(false);
   const [pending2fa, setPending2fa] = useState(null);
   const [totpCode, setTotpCode] = useState('');
+
+  useEffect(() => {
+    if (user) {
+      navigate('/chat', { replace: true });
+    }
+  }, [user, navigate]);
 
   useEffect(() => {
     document.title = 'Log in — QuantumChat';

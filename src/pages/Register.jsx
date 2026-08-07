@@ -65,7 +65,7 @@ function getFriendlyRegisterError(serverError, statusCode) {
 }
 
 export default function Register() {
-  const { register } = useAuth();
+  const { register, user } = useAuth();
   const navigate = useNavigate();
   const [form, setForm] = useState({ username: '', email: '', password: '' });
   const [error, setError] = useState(null);
@@ -73,6 +73,13 @@ export default function Register() {
   const [showPassword, setShowPassword] = useState(false);
   const [keyBackup, setKeyBackup] = useState(null);
   const [keysDownloaded, setKeysDownloaded] = useState(false);
+
+  // Redirect already-authenticated users to chat (skip during key backup flow)
+  useEffect(() => {
+    if (user && !keyBackup) {
+      navigate('/chat', { replace: true });
+    }
+  }, [user, keyBackup, navigate]);
 
   // Dynamic page title
   useEffect(() => {
