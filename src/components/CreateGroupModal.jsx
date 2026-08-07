@@ -69,7 +69,6 @@ export default function CreateGroupModal({ users, onClose, onCreate }) {
     }
   }
 
-  const memberCount = selected.size + 1;
   const canSubmit = name.trim().length >= 2;
 
   return (
@@ -147,7 +146,7 @@ export default function CreateGroupModal({ users, onClose, onCreate }) {
         </fieldset>
 
         <div className="create-group-body">
-        <div className="create-group-field">
+          <div className="create-group-field">
           <label className="create-group-label" htmlFor="group-name">
             Group name
           </label>
@@ -164,93 +163,93 @@ export default function CreateGroupModal({ users, onClose, onCreate }) {
           />
         </div>
 
-        {visibility === 'public' && (
-          <fieldset className="create-group-field create-group-visibility" disabled={submitting}>
-            <legend className="create-group-label">Who can join</legend>
-            <label className={`create-group-choice ${joinPolicy === 'open' ? 'selected' : ''}`}>
-              <input
-                type="radio"
-                name="joinPolicy"
-                value="open"
-                checked={joinPolicy === 'open'}
-                onChange={() => setJoinPolicy('open')}
-              />
-              <span>
-                <strong>Anyone can join</strong>
-                <small>Open join from Discover.</small>
-              </span>
-            </label>
-            <label className={`create-group-choice ${joinPolicy === 'request' ? 'selected' : ''}`}>
-              <input
-                type="radio"
-                name="joinPolicy"
-                value="request"
-                checked={joinPolicy === 'request'}
-                onChange={() => setJoinPolicy('request')}
-              />
-              <span>
-                <strong>Request to join</strong>
-                <small>Admins accept or reject requests.</small>
-              </span>
-            </label>
-          </fieldset>
-        )}
-
-        <div className="create-group-field">
-          <div className="create-group-label-row">
-            <label className="create-group-label" htmlFor="group-member-search">
-              Members (optional)
-            </label>
-            <span className="create-group-count">
-              {selected.size === 0 ? 'None selected' : `${selected.size} selected`}
-            </span>
-          </div>
-          <input
-            id="group-member-search"
-            className="create-group-input"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search people…"
-            disabled={submitting}
-          />
-        </div>
-
-        <div className="member-picker" role="listbox" aria-label="Select members">
-          {filtered.map((u) => {
-            const id = String(u.id);
-            const checked = selected.has(id);
-            return (
-              <label
-                key={id}
-                className={`member-picker-item ${checked ? 'selected' : ''}`}
-                role="option"
-                aria-selected={checked}
-              >
+          {visibility === 'public' && (
+            <fieldset className="create-group-field create-group-visibility" disabled={submitting}>
+              <legend className="create-group-label">Who can join</legend>
+              <label className={`create-group-choice ${joinPolicy === 'open' ? 'selected' : ''}`}>
                 <input
-                  type="checkbox"
-                  checked={checked}
-                  onChange={() => toggle(id)}
-                  disabled={submitting}
+                  type="radio"
+                  name="joinPolicy"
+                  value="open"
+                  checked={joinPolicy === 'open'}
+                  onChange={() => setJoinPolicy('open')}
                 />
-                <span className="avatar tiny">{(u.username || '?').slice(0, 2).toUpperCase()}</span>
-                <span className="member-picker-meta">
-                  <span className="member-picker-name">{u.username}</span>
-                  {u.email && <span className="member-picker-email">{u.email}</span>}
-                </span>
-                <span className={`member-check ${checked ? 'on' : ''}`} aria-hidden="true">
-                  {checked ? (
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                      <polyline points="20 6 9 17 4 12" />
-                    </svg>
-                  ) : null}
+                <span>
+                  <strong>Anyone can join</strong>
+                  <small>Open join from Discover.</small>
                 </span>
               </label>
-            );
-          })}
-          {filtered.length === 0 && <p className="empty-hint">No matching users</p>}
-        </div>
+              <label className={`create-group-choice ${joinPolicy === 'request' ? 'selected' : ''}`}>
+                <input
+                  type="radio"
+                  name="joinPolicy"
+                  value="request"
+                  checked={joinPolicy === 'request'}
+                  onChange={() => setJoinPolicy('request')}
+                />
+                <span>
+                  <strong>Request to join</strong>
+                  <small>Admins accept or reject requests.</small>
+                </span>
+              </label>
+            </fieldset>
+          )}
 
-        {error && <div className="auth-error create-group-error">{error}</div>}
+          <div className="create-group-field">
+            <div className="create-group-label-row">
+              <label className="create-group-label" htmlFor="group-member-search">
+                Members (optional)
+              </label>
+              <span className="create-group-count">
+                {selected.size === 0 ? 'None selected' : `${selected.size} selected`}
+              </span>
+            </div>
+            <input
+              id="group-member-search"
+              className="create-group-input"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search people…"
+              disabled={submitting}
+            />
+          </div>
+
+          <div className="member-picker" role="listbox" aria-label="Select members">
+            {filtered.map((u) => {
+              const id = String(u.id);
+              const checked = selected.has(id);
+              return (
+                <label
+                  key={id}
+                  className={`member-picker-item ${checked ? 'selected' : ''}`}
+                  role="option"
+                  aria-selected={checked}
+                >
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={() => toggle(id)}
+                    disabled={submitting}
+                  />
+                  <span className="avatar tiny">{(u.username || '?').slice(0, 2).toUpperCase()}</span>
+                  <span className="member-picker-meta">
+                    <span className="member-picker-name">{u.username}</span>
+                    {u.email && <span className="member-picker-email">{u.email}</span>}
+                  </span>
+                  <span className={`member-check ${checked ? 'on' : ''}`} aria-hidden="true">
+                    {checked ? (
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="20 6 9 17 4 12" />
+                      </svg>
+                    ) : null}
+                  </span>
+                </label>
+              );
+            })}
+            {filtered.length === 0 && <p className="empty-hint">No matching users</p>}
+          </div>
+
+          {error && <div className="auth-error create-group-error">{error}</div>}
         </div>
 
         <div className="create-group-actions">
@@ -263,7 +262,7 @@ export default function CreateGroupModal({ users, onClose, onCreate }) {
             Cancel
           </button>
           <button type="submit" className="confirm-btn primary" disabled={submitting || !canSubmit}>
-            {submitting ? 'Creating…' : `Create (${memberCount})`}
+            {submitting ? 'Creating…' : 'Create'}
           </button>
         </div>
       </form>

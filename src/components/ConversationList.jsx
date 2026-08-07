@@ -27,8 +27,8 @@ const FILTERS = [
   { id: 'unread', label: 'Unread' },
   { id: 'groups', label: 'Groups' },
   { id: 'friends', label: 'Friends' },
-  { id: 'discover', label: 'Discover' },
-  { id: 'public', label: 'Public Groups' },
+  // { id: 'discover', label: 'Discover' },
+  { id: 'public', label: 'Discover' },
   { id: 'archived', label: 'Archived' },
 ];
 
