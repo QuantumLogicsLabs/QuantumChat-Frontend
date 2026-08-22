@@ -11,11 +11,6 @@ function urlBase64ToUint8Array(base64String) {
   return output;
 }
 
-/**
- * Current browser notification permission, without prompting the user.
- * Returns 'granted' | 'denied' | 'default' | 'unsupported'.
- */
-
 export function getNotificationPermission() {
   if (typeof window === 'undefined' || !('Notification' in window)) return 'unsupported';
   return Notification.permission; // 'granted' | 'denied' | 'default'

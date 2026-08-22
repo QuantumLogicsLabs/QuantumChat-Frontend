@@ -33,6 +33,7 @@ import CameraCapture from "../components/CameraCapture.jsx";
 import ChatEmptyState from "../components/chat/ChatEmptyState.jsx";
 import ChatShell from "../components/chat/ChatShell.jsx";
 import ComposerPlusSheet from "../components/chat/ComposerPlusSheet.jsx";
+import MediaSendPreview from "../components/chat/MediaSendPreview.jsx";
 import ConversationPane from "../components/chat/ConversationPane.jsx";
 import InfoPanel from "../components/chat/InfoPanel.jsx";
 import MessageActionSheet from "../components/chat/MessageActionSheet.jsx";
@@ -194,6 +195,16 @@ function isViewOnceEligibleFile(file) {
   return false;
 }
 
+function isMediaPreviewFile(file) {
+  if (!file) return false;
+  const mime = String(file.type || '').toLowerCase();
+  const name = String(file.name || '').toLowerCase();
+  if (mime === 'image/svg+xml' || name.endsWith('.svg')) return false;
+  if (mime.startsWith('image/') || /\.(png|jpe?g|gif|webp|bmp)$/i.test(name)) return true;
+  if (mime.startsWith('video/') || /\.(mp4|webm|mov|mkv|avi)$/i.test(name)) return true;
+  return false;
+}
+
 function memberId(m) {
   return String(m?.id || m?._id || m);
 }
@@ -321,7 +332,8 @@ const [pendingJumpMessageId, setPendingJumpMessageId] = useState(null);
   const [uploads, setUploads] = useState([]);
   const [cameraOpen, setCameraOpen] = useState(false);
   const [disappearSeconds, setDisappearSeconds] = useState(0);
-  const [viewOnceEnabled, setViewOnceEnabled] = useState(false);
+  const [mediaPreview, setMediaPreview] = useState(null);
+  const [mediaPreviewSending, setMediaPreviewSending] = useState(false);
   const [allowForward, setAllowForward] = useState(true);
   const [forwardUntilSeconds, setForwardUntilSeconds] = useState(0);
   const [gallery, setGallery] = useState(null);
@@ -1932,7 +1944,7 @@ const [pendingJumpMessageId, setPendingJumpMessageId] = useState(null);
     loadedThreadKeyRef.current = threadKey;
 
     setDisappearSeconds(0);
-    setViewOnceEnabled(false);
+    setMediaPreview(null);
     let cancelled = false;
     setPeerTyping(false);
     setHasMoreMessages(false);
@@ -3779,7 +3791,7 @@ async function handleUnblockUser(peerId) {
     return undefined;
   }
 
-  async function sendAttachmentFile(file, { plainBytes, quiet } = {}) {
+  async function sendAttachmentFile(file, { plainBytes, quiet, viewOnce = false } = {}) {
     if (
       !file ||
       !selected ||
@@ -3860,14 +3872,7 @@ async function handleUnblockUser(peerId) {
             attachment.mimetype || file.type || "application/octet-stream",
           size: attachment.size || file.size,
         });
-        const wantViewOnce = viewOnceEnabled && isViewOnceEligibleFile(file);
-        if (viewOnceEnabled && !wantViewOnce) {
-          showToast(
-            "View once is only available for photos, videos, and voice notes",
-            "info",
-            3500,
-          );
-        }
+        const wantViewOnce = viewOnce && isViewOnceEligibleFile(file);
         await sendGroupPayload(plaintext, {
           kind: "file",
           attachmentId: attachment.id,
@@ -3973,14 +3978,7 @@ async function handleUnblockUser(peerId) {
         attachmentId,
       };
       if (disappearSeconds > 0) msgBody.expiresInSeconds = disappearSeconds;
-      const wantViewOnce = viewOnceEnabled && isViewOnceEligibleFile(file);
-      if (viewOnceEnabled && !wantViewOnce) {
-        showToast(
-          "View once is only available for photos, videos, and voice notes",
-          "info",
-          3500,
-        );
-      }
+      const wantViewOnce = viewOnce && isViewOnceEligibleFile(file);
       if (wantViewOnce) msgBody.viewOnce = true;
       const forwardPolicy = buildForwardPolicy();
       if (forwardPolicy && !wantViewOnce) msgBody.forwardPolicy = forwardPolicy;
@@ -4010,7 +4008,7 @@ async function handleUnblockUser(peerId) {
     }
   }
 
-  async function sendAttachmentFiles(filesOrFile) {
+  async function sendAttachmentFiles(filesOrFile, { viewOnce = false } = {}) {
     const list = Array.isArray(filesOrFile)
       ? filesOrFile
       : filesOrFile
@@ -4028,7 +4026,7 @@ async function handleUnblockUser(peerId) {
     let failed = 0;
     for (const file of files) {
       try {
-        await sendAttachmentFile(file, { quiet: files.length > 1 });
+        await sendAttachmentFile(file, { quiet: files.length > 1, viewOnce });
         ok += 1;
       } catch (err) {
         failed += 1;
@@ -4049,6 +4047,66 @@ async function handleUnblockUser(peerId) {
     }
   }
 
+  async function queueAttachmentFiles(filesOrFile) {
+    const list = Array.isArray(filesOrFile)
+      ? filesOrFile
+      : filesOrFile
+        ? [filesOrFile]
+        : [];
+    const files = list.filter(Boolean);
+    if (
+      !files.length ||
+      !selected ||
+      (selected.type !== "dm" && selected.type !== "group")
+    )
+      return;
+
+    const mediaFiles = files.filter(isMediaPreviewFile);
+    const otherFiles = files.filter((f) => !isMediaPreviewFile(f));
+
+    if (otherFiles.length) {
+      await sendAttachmentFiles(otherFiles);
+    }
+
+    if (mediaFiles.length) {
+      setMediaPreview({ files: mediaFiles, index: 0, viewOnce: false });
+    }
+  }
+
+  async function handleMediaPreviewSend() {
+    if (!mediaPreview || mediaPreviewSending) return;
+    const file = mediaPreview.files[mediaPreview.index];
+    if (!file) {
+      setMediaPreview(null);
+      return;
+    }
+
+    setMediaPreviewSending(true);
+    try {
+      await sendAttachmentFile(file, {
+        viewOnce: mediaPreview.viewOnce,
+        quiet: mediaPreview.files.length > 1,
+      });
+      const nextIndex = mediaPreview.index + 1;
+      if (nextIndex < mediaPreview.files.length) {
+        setMediaPreview({
+          files: mediaPreview.files,
+          index: nextIndex,
+          viewOnce: false,
+        });
+      } else {
+        setMediaPreview(null);
+      }
+    } catch (err) {
+      showToast(
+        err.response?.data?.error || err.message || "Failed to send media",
+        "error",
+      );
+    } finally {
+      setMediaPreviewSending(false);
+    }
+  }
+
   async function handleFileChange(e) {
     const files = Array.from(e.target.files || []);
     e.target.value = "";
@@ -4058,7 +4116,7 @@ async function handleUnblockUser(peerId) {
       (selected.type !== "dm" && selected.type !== "group")
     )
       return;
-    await sendAttachmentFiles(files);
+    await queueAttachmentFiles(files);
   }
 
   function handlePaste(e) {
@@ -4088,7 +4146,7 @@ async function handleUnblockUser(peerId) {
     }
     if (!imageFiles.length) return;
     e.preventDefault();
-    sendAttachmentFiles(imageFiles).catch((err) => {
+    queueAttachmentFiles(imageFiles).catch((err) => {
       showToast(err.message || "Paste upload failed", "error");
     });
   }
@@ -4116,7 +4174,7 @@ async function handleUnblockUser(peerId) {
     setIsDragging(false);
     const files = Array.from(e.dataTransfer.files || []);
     if (files.length) {
-      sendAttachmentFiles(files).catch((err) => {
+      queueAttachmentFiles(files).catch((err) => {
         showToast(err.message || "File drop failed", "error");
       });
     }
@@ -5580,7 +5638,7 @@ useEffect(() => {
                 {isDragging && (
                   <DragDropOverlay
                     isVisible={true}
-                    onFileDrop={sendAttachmentFiles}
+                    onFileDrop={queueAttachmentFiles}
                   />
                 )}
 
@@ -5910,24 +5968,6 @@ useEffect(() => {
                           className="composer-context-close"
                           aria-label="Cancel announcement mode"
                           onClick={() => setPendingAnnouncement(false)}
-                        >
-                          <X size={16} strokeWidth={2} aria-hidden="true" />
-                        </button>
-                      </div>
-                    )}
-                    {viewOnceEnabled && !editingMessage && (
-                      <div className="composer-context">
-                        <div className="composer-context-copy">
-                          <strong>View once on</strong>
-                          <span>
-                            Next photo, video, or voice note opens only once
-                          </span>
-                        </div>
-                        <button
-                          type="button"
-                          className="composer-context-close"
-                          aria-label="Turn off view once"
-                          onClick={() => setViewOnceEnabled(false)}
                         >
                           <X size={16} strokeWidth={2} aria-hidden="true" />
                         </button>
@@ -6618,7 +6658,7 @@ useEffect(() => {
         open={cameraOpen}
         onClose={() => setCameraOpen(false)}
         onCapture={(file) => {
-          sendAttachmentFiles(file).catch((err) => {
+          queueAttachmentFiles(file).catch((err) => {
             showToast(err.message || "Camera upload failed", "error");
           });
         }}
@@ -6632,6 +6672,22 @@ useEffect(() => {
           setGallery((g) => (g ? { ...g, index: next } : g))
         }
         onClose={() => setGallery(null)}
+      />
+
+      <MediaSendPreview
+        open={Boolean(mediaPreview?.files?.length)}
+        file={mediaPreview?.files?.[mediaPreview.index]}
+        index={mediaPreview?.index ?? 0}
+        total={mediaPreview?.files?.length ?? 1}
+        viewOnce={Boolean(mediaPreview?.viewOnce)}
+        onToggleViewOnce={() =>
+          setMediaPreview((prev) =>
+            prev ? { ...prev, viewOnce: !prev.viewOnce } : prev,
+          )
+        }
+        onSend={handleMediaPreviewSend}
+        onClose={() => !mediaPreviewSending && setMediaPreview(null)}
+        sending={mediaPreviewSending}
       />
 
       <ComposerPlusSheet
@@ -6657,8 +6713,6 @@ useEffect(() => {
           const i = steps.indexOf(disappearSeconds);
           setDisappearSeconds(steps[(i + 1) % steps.length]);
         }}
-        viewOnceEnabled={viewOnceEnabled}
-        onToggleViewOnce={() => setViewOnceEnabled((v) => !v)}
         allowForward={allowForward}
         onToggleForward={() => setAllowForward((v) => !v)}
         forwardUntilSeconds={forwardUntilSeconds}

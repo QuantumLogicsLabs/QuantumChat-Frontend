@@ -1,8 +1,8 @@
-import { Paperclip, Camera, BarChart2, Calendar, Megaphone, Clock, Eye, Forward, Smile } from 'lucide-react';
+import { Paperclip, Camera, BarChart2, Calendar, Megaphone, Clock, Forward, Smile } from 'lucide-react';
 import BottomSheet from '../ui/BottomSheet.jsx';
 
 /**
- * Nested composer actions — attach / camera / group tools / disappear / view once.
+ * Nested composer actions — attach / camera / group tools / disappear / forwarding.
  */
 export default function ComposerPlusSheet({
   open,
@@ -16,8 +16,6 @@ export default function ComposerPlusSheet({
   canAnnounce = false,
   disappearSeconds = 0,
   onCycleDisappear,
-  viewOnceEnabled = false,
-  onToggleViewOnce,
   allowForward = true,
   onToggleForward,
   forwardUntilSeconds = 0,
@@ -52,15 +50,6 @@ export default function ComposerPlusSheet({
             ) : null}
           </>
         ) : null}
-        <button
-          type="button"
-          role="menuitem"
-          className={`qc-composer-plus-item${viewOnceEnabled ? ' is-active' : ''}`}
-          onClick={() => onToggleViewOnce?.()}
-        >
-          <Eye size={20} />
-          <span>View once {viewOnceEnabled ? '· on' : '· off'}</span>
-        </button>
         <button type="button" role="menuitem" className="qc-composer-plus-item" onClick={() => onCycleDisappear?.()}>
           <Clock size={20} />
           <span>

@@ -9,7 +9,6 @@ const DEFAULT_SETTINGS = {
   soundVolume: 80,
   messagePreview: 'full',
   vibration: 'on',
-  birthdayReminders: true,
   doNotDisturb: { enabled: false, startTime: '22:00', endTime: '07:00', allowedContacts: [] },
   groupNotifications: 'all',
   callNotifications: {
@@ -73,17 +72,17 @@ export function NotificationSettingsProvider({ children }) {
   }, [user]);
 
   const updateSettings = useCallback(async (partial) => {
-      setSettings((prev) => mergeNotificationSettings(prev, partial));
-      try {
-        const res = await updateNotificationSettings(partial);
-        if (res?.data) {
-          setSettings(mergeNotificationSettings(DEFAULT_SETTINGS, res.data));
-        }
-        return { success: true };
-      } catch (err) {
-        return { success: false, error: err?.response?.data?.error || err.message };
+    setSettings((prev) => mergeNotificationSettings(prev, partial));
+    try {
+      const res = await updateNotificationSettings(partial);
+      if (res?.data) {
+        setSettings(mergeNotificationSettings(DEFAULT_SETTINGS, res.data));
       }
-    }, []);
+      return { success: true };
+    } catch (err) {
+      return { success: false, error: err?.response?.data?.error || err.message };
+    }
+  }, []);
 
   const isMuted = useCallback(() => false, []);
 
