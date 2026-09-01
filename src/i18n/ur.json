@@ -37,7 +37,8 @@
     "friendsOnly": "صرف دوست",
     "nobody": "کوئی بھی نہیں",
     "onlyMe": "صرف میں",
-    "selected": "منتخب افراد"
+    "selected": "منتخب افراد",
+    "of": "میں سے"
   },
   "nav": {
     "markAllRead": "سب پڑھے ہوئے نشان زد کریں",
@@ -94,6 +95,10 @@
       "avatarRemoved": "پروفائل تصویر ہٹا دی گئی",
       "emailVerified": "ای میل تصدیق شدہ",
       "resendVerifyEmail": "لنک دوبارہ بھیجیں"
+    },
+    "transliteration": {
+      "title": "رسم الخط کے نام اور تلفظ",
+      "hint": "جب صارفین اپنی ایپ غیر لاطینی رسم الخط میں تبدیل کرتے ہیں تو آپ کا نام ان کے رسم الخط میں ظاہر ہوتا ہے۔ آپ نیچے ہر رسم الخط کے لیے ہجے تبدیل کر سکتے ہیں:"
     },
     "appearance": {
       "title": "ظاہری شکل",
@@ -224,9 +229,51 @@
     "messageOptions": "پیغام کے اختیارات",
     "messageDeleted": "یہ پیغام حذف کر دیا گیا تھا",
     "deleteForMe": "صرف میرے لیے حذف کریں",
-    "deleteForEveryone": "سب کے لیے حذف کریں"
+    "deleteForEveryone": "سب کے لیے حذف کریں",
+    "searchInChat": "گفتگو میں تلاش کریں",
+    "chatMedia": "چیٹ میڈیا",
+    "starredMessages": "اسٹار شدہ پیغامات",
+    "wallpaper": "وال پیپر",
+    "mute": "میوٹ کریں",
+    "unmute": "ان میوٹ کریں",
+    "addToVault": "والٹ میں محفوظ کریں",
+    "removeFromVault": "والٹ سے نکالیں",
+    "clearChat": "چیٹ صاف کریں",
+    "block": "بلاک کریں",
+    "unblock": "ان بلاک کریں",
+    "chatDetails": "چیٹ کی تفصیلات",
+    "groupSettings": "گروپ کی ترتیبات",
+    "chatOptions": "چیٹ کے اختیارات",
+    "pickReaction": "ردعمل منتخب کریں",
+    "quickReactions": "فوری ردعمل",
+    "moreReactions": "مزید ردعمل",
+    "message": "پیغام",
+    "reply": "جواب دیں",
+    "copy": "کاپی کریں",
+    "forward": "فارورڈ کریں",
+    "star": "اسٹار کریں",
+    "unstar": "اسٹار ہٹائیں",
+    "pin": "پن کریں",
+    "unpin": "ان پن کریں",
+    "edit": "ترمیم کریں",
+    "delete": "حذف کریں"
+  },
+  "messageInfo": {
+    "title": "پیغام کی تفصیلات",
+    "delivered": "پہنچ گیا",
+    "read": "پڑھ لیا گیا",
+    "members": "اراکین",
+    "reactions": "ردعمل",
+    "replies": "جوابات",
+    "noOtherMembers": "اس گروپ میں کوئی اور رکن نہیں ہے۔",
+    "tapForDetails": "تفصیلات دیکھنے کے لیے ٹیپ کریں",
+    "error": "پیغام کی تفصیلات لوڈ کرنے میں ناکامی",
+    "readBy": "پڑھنے والے",
+    "notDeliveredYet": "ابھی تک موصول نہیں ہوا"
   },
   "composer": {
+    "sendPhoto": "تصویر بھیجیں",
+    "sendVideo": "ویڈیو بھیجیں",
     "moreActions": "مزید اختیارات",
     "attachFile": "فائل منسلک کریں",
     "camera": "کیمرہ",

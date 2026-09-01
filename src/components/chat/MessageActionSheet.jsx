@@ -9,6 +9,7 @@ import {
   Star,
   Trash2,
 } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import BottomSheet from '../ui/BottomSheet.jsx';
 import { QUICK_REACTIONS } from '../../utils/emojis.js';
 
@@ -26,7 +27,7 @@ export default function MessageActionSheet({
   onForward,
   onEdit,
   onDelete,
-   onStar,
+  onStar,
   onPin,
   onShowInfo,
   starred = false,
@@ -34,6 +35,7 @@ export default function MessageActionSheet({
   canEdit = false,
   canForward = true,
 }) {
+  const { t } = useTranslation();
   if (!message) return null;
 
   const run = (fn) => {
@@ -42,8 +44,8 @@ export default function MessageActionSheet({
   };
 
   return (
-    <BottomSheet open={open} onClose={onClose} title="Message">
-      <div className="qc-msg-actions-reactions" role="group" aria-label="Quick reactions">
+    <BottomSheet open={open} onClose={onClose} title={t('chat.message', 'Message')}>
+      <div className="qc-msg-actions-reactions" role="group" aria-label={t('chat.quickReactions', 'Quick reactions')}>
         {QUICK_REACTIONS.map((emoji) => (
           <button
             key={emoji}
@@ -58,31 +60,31 @@ export default function MessageActionSheet({
           type="button"
           className="qc-msg-reaction-chip more"
           onClick={() => run(() => onReact?.(message, null))}
-          aria-label="More reactions"
+          aria-label={t('chat.moreReactions', 'More reactions')}
         >
           <Smile size={18} />
         </button>
       </div>
       <div className="qc-msg-actions-list" role="menu">
-               <button type="button" role="menuitem" onClick={() => run(onReply)}>
-          <Reply size={18} /> Reply
+        <button type="button" role="menuitem" onClick={() => run(onReply)}>
+          <Reply size={18} /> {t('chat.reply', 'Reply')}
         </button>
         {isMine && onShowInfo ? (
           <button type="button" role="menuitem" onClick={() => run(onShowInfo)}>
-            <Info size={18} /> Message info
+            <Info size={18} /> {t('messageInfo.title', 'Message info')}
           </button>
         ) : null}
         <button type="button" role="menuitem" onClick={() => run(onCopy)}>
-          <Copy size={18} /> Copy
+          <Copy size={18} /> {t('chat.copy', 'Copy')}
         </button>
         {canForward ? (
           <button type="button" role="menuitem" onClick={() => run(onForward)}>
-            <Forward size={18} /> Forward
+            <Forward size={18} /> {t('chat.forward', 'Forward')}
           </button>
         ) : null}
         {canEdit ? (
           <button type="button" role="menuitem" onClick={() => run(onEdit)}>
-            <Pencil size={18} /> Edit
+            <Pencil size={18} /> {t('chat.edit', 'Edit')}
           </button>
         ) : null}
         <button type="button" role="menuitem" onClick={() => run(onStar)}>
@@ -91,13 +93,13 @@ export default function MessageActionSheet({
             fill={starred ? '#FFC107' : 'none'}
             stroke={starred ? '#FFC107' : 'currentColor'}
           />{' '}
-          {starred ? 'Unstar' : 'Star'}
+          {starred ? t('chat.unstar', 'Unstar') : t('chat.star', 'Star')}
         </button>
         <button type="button" role="menuitem" onClick={() => run(onPin)}>
-          <Pin size={18} /> {pinned ? 'Unpin' : 'Pin'}
+          <Pin size={18} /> {pinned ? t('chat.unpin', 'Unpin') : t('chat.pin', 'Pin')}
         </button>
         <button type="button" role="menuitem" className="danger" onClick={() => run(onDelete)}>
-          <Trash2 size={18} /> Delete{isMine ? '' : ' for me'}
+          <Trash2 size={18} /> {isMine ? t('chat.deleteForEveryone', 'Delete for everyone') : t('chat.deleteForMe', 'Delete for me')}
         </button>
       </div>
     </BottomSheet>

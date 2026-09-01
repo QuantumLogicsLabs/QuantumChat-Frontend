@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { Eye, Send, X } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import useFocusTrap from '../../hooks/useFocusTrap.js';
 
 /**
@@ -16,6 +17,7 @@ export default function MediaSendPreview({
   onClose,
   sending = false,
 }) {
+  const { t } = useTranslation();
   const containerRef = useRef(null);
   const imagePreviewRef = useRef(null);
   const videoPreviewRef = useRef(null);
@@ -55,24 +57,30 @@ export default function MediaSendPreview({
   const isVideo = mime.startsWith('video/');
 
   return (
-    <div className="media-send-overlay" role="dialog" aria-modal="true" aria-label="Send media">
+    <div className="media-send-overlay" role="dialog" aria-modal="true" aria-label={t('composer.attachFile', 'Attach file')}>
       <div className="media-send-panel" ref={containerRef}>
         <header className="media-send-header">
           <button
             type="button"
             className="composer-context-close"
             onClick={onClose}
-            aria-label="Cancel"
+            aria-label={t('common.cancel', 'Cancel')}
             disabled={sending}
           >
             <X size={18} strokeWidth={2} aria-hidden="true" />
           </button>
           {total > 1 ? (
             <span className="media-send-counter">
-              {index + 1} of {total}
+              <bdi dir="ltr">{index + 1}</bdi>
+              {' '}
+              <span>{t('common.of', 'of')}</span>
+              {' '}
+              <bdi dir="ltr">{total}</bdi>
             </span>
           ) : (
-            <span className="media-send-title">Send {isVideo ? 'video' : 'photo'}</span>
+            <span className="media-send-title">
+              {isVideo ? t('composer.sendVideo', 'Send video') : t('composer.sendPhoto', 'Send photo')}
+            </span>
           )}
           <span className="media-send-header-spacer" aria-hidden="true" />
         </header>

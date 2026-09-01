@@ -37,7 +37,8 @@
     "friendsOnly": "Friends Only",
     "nobody": "No One",
     "onlyMe": "Only Me",
-    "selected": "Selected People"
+    "selected": "Selected People",
+    "of": "of"
   },
   "nav": {
     "markAllRead": "Mark all as read",
@@ -94,6 +95,10 @@
       "avatarRemoved": "Profile photo removed",
       "emailVerified": "Email verified",
       "resendVerifyEmail": "Resend link"
+    },
+    "transliteration": {
+      "title": "Script Names & Transliteration",
+      "hint": "When users switch their app to non-Latin scripts, your name appears in their native alphabet. You can customize your name spelling for each script below:"
     },
     "appearance": {
       "title": "Appearance",
@@ -224,9 +229,51 @@
     "messageOptions": "Message options",
     "messageDeleted": "This message was deleted",
     "deleteForMe": "Delete for me",
-    "deleteForEveryone": "Delete for everyone"
+    "deleteForEveryone": "Delete for everyone",
+    "searchInChat": "Search in chat",
+    "chatMedia": "Chat media",
+    "starredMessages": "Starred messages",
+    "wallpaper": "Wallpaper",
+    "mute": "Mute",
+    "unmute": "Unmute",
+    "addToVault": "Add to vault",
+    "removeFromVault": "Remove from vault",
+    "clearChat": "Clear chat",
+    "block": "Block",
+    "unblock": "Unblock",
+    "chatDetails": "Chat details",
+    "groupSettings": "Group settings",
+    "chatOptions": "Chat options",
+    "pickReaction": "Pick a reaction",
+    "quickReactions": "Quick reactions",
+    "moreReactions": "More reactions",
+    "message": "Message",
+    "reply": "Reply",
+    "copy": "Copy",
+    "forward": "Forward",
+    "star": "Star",
+    "unstar": "Unstar",
+    "pin": "Pin",
+    "unpin": "Unpin",
+    "edit": "Edit",
+    "delete": "Delete"
+  },
+  "messageInfo": {
+    "title": "Message info",
+    "delivered": "Delivered",
+    "read": "Read",
+    "members": "Members",
+    "reactions": "Reactions",
+    "replies": "Replies",
+    "noOtherMembers": "No other members in this group.",
+    "tapForDetails": "Tap for details",
+    "error": "Failed to load message info",
+    "readBy": "Read by",
+    "notDeliveredYet": "Not delivered yet"
   },
   "composer": {
+    "sendPhoto": "Send photo",
+    "sendVideo": "Send video",
     "moreActions": "More actions",
     "attachFile": "Attach file",
     "camera": "Camera",

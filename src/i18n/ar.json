@@ -37,7 +37,8 @@
     "friendsOnly": "الأصدقاء فقط",
     "nobody": "لا أحد",
     "onlyMe": "أنا فقط",
-    "selected": "أشخاص محددون"
+    "selected": "أشخاص محددون",
+    "of": "من"
   },
   "nav": {
     "markAllRead": "تحديد الكل كمقروء",
@@ -94,6 +95,10 @@
       "avatarRemoved": "تم حذف الصورة الشخصية",
       "emailVerified": "البريد الإلكتروني مؤكد",
       "resendVerifyEmail": "إعادة إرسال الرابط"
+    },
+    "transliteration": {
+      "title": "أسماء النصوص ونقل الحروف",
+      "hint": "عندما يغير المستخدمون تطبيقهم إلى لغات غير لاتينية، يظهر اسمك بأبجديتهم الأصلية. يمكنك تخصيص تهجئة اسمك لكل نص أدناه:"
     },
     "appearance": {
       "title": "المظهر",
@@ -224,9 +229,51 @@
     "messageOptions": "خيارات الرسالة",
     "messageDeleted": "تم حذف هذه الرسالة",
     "deleteForMe": "حذف لدي فقط",
-    "deleteForEveryone": "حذف لدى الجميع"
+    "deleteForEveryone": "حذف لدى الجميع",
+    "searchInChat": "البحث في المحادثة",
+    "chatMedia": "وسائط المحادثة",
+    "starredMessages": "الرسائل المميزة",
+    "wallpaper": "خلفية الشاشة",
+    "mute": "كتم الصوت",
+    "unmute": "إلغاء الكتم",
+    "addToVault": "إضافة إلى الخزنة",
+    "removeFromVault": "إزالة من الخزنة",
+    "clearChat": "مسح المحادثة",
+    "block": "حظر",
+    "unblock": "إلغاء الحظر",
+    "chatDetails": "تفاصيل المحادثة",
+    "groupSettings": "إعدادات المجموعة",
+    "chatOptions": "خيارات المحادثة",
+    "pickReaction": "اختر تفاعلاً",
+    "quickReactions": "تفاعلات سريعة",
+    "moreReactions": "المزيد من التفاعلات",
+    "message": "رسالة",
+    "reply": "رد",
+    "copy": "نسخ",
+    "forward": "إعادة توجيه",
+    "star": "تمييز بنجمة",
+    "unstar": "إزالة النجمة",
+    "pin": "تثبيت",
+    "unpin": "إلغاء التثبيت",
+    "edit": "تعديل",
+    "delete": "حذف"
+  },
+  "messageInfo": {
+    "title": "معلومات الرسالة",
+    "delivered": "تم التسليم",
+    "read": "تمت القراءة",
+    "members": "الأعضاء",
+    "reactions": "التفاعلات",
+    "replies": "الردود",
+    "noOtherMembers": "لا يوجد أعضاء آخرون في هذه المجموعة.",
+    "tapForDetails": "انقر لعرض التفاصيل",
+    "error": "فشل تحميل معلومات الرسالة",
+    "readBy": "تمت القراءة بواسطة",
+    "notDeliveredYet": "لم يتم التسليم بعد"
   },
   "composer": {
+    "sendPhoto": "إرسال صورة",
+    "sendVideo": "إرسال فيديو",
     "moreActions": "إجراءات إضافية",
     "attachFile": "إرفاق ملف",
     "camera": "الكاميرا",

@@ -1,6 +1,8 @@
 import { Check, CheckCheck, X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import client from '../api/client.js';
+import { getDisplayName } from '../utils/getDisplayName.js';
 import UserAvatar from './UserAvatar.jsx';
 
 function formatTimestamp(iso) {
@@ -15,41 +17,10 @@ function formatTimestamp(iso) {
   });
 }
 
-const READ_COLOR = '#53bdeb';
-const MUTED_COLOR = '#8b8b8b';
-const TRACK_COLOR = 'rgba(0,0,0,0.08)';
-const CARD_BG = 'var(--modal-bg, #fff)';
-const TEXT_PRIMARY = 'var(--text-primary, #1a1a1a)';
-
 function SectionLabel({ children }) {
   return (
-    <div
-      style={{
-        fontSize: 11.5,
-        fontWeight: 700,
-        letterSpacing: 0.5,
-        textTransform: 'uppercase',
-        color: MUTED_COLOR,
-        margin: '20px 0 10px',
-      }}
-    >
+    <div className="message-info-section-label">
       {children}
-    </div>
-  );
-}
-
-function ProgressBar({ fraction, color }) {
-  return (
-    <div style={{ height: 4, borderRadius: 2, background: TRACK_COLOR, overflow: 'hidden' }}>
-      <div
-        style={{
-          height: '100%',
-          width: `${Math.round(fraction * 100)}%`,
-          background: color,
-          borderRadius: 2,
-          transition: 'width 300ms ease',
-        }}
-      />
     </div>
   );
 }
@@ -59,30 +30,16 @@ function StatusRow({ label, at, isLast }) {
   const done = Boolean(at);
 
   return (
-    <div style={{ display: 'flex', gap: 14, alignItems: 'stretch' }}>
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: 32, flexShrink: 0 }}>
-        <div
-          style={{
-            width: 32,
-            height: 32,
-            borderRadius: '50%',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            background: done ? 'rgba(83, 189, 235, 0.14)' : 'rgba(0,0,0,0.05)',
-            color: done ? READ_COLOR : MUTED_COLOR,
-            flexShrink: 0,
-          }}
-        >
+    <div className="message-info-status-row">
+      <div className="message-info-status-icon-col">
+        <div className={`message-info-status-icon ${done ? 'done' : 'pending'}`}>
           {done ? <CheckCheck size={16} strokeWidth={2.5} /> : <Check size={16} strokeWidth={2.5} />}
         </div>
-        {!isLast && (
-          <div style={{ width: 2, flex: 1, minHeight: 20, background: TRACK_COLOR, marginTop: 2, marginBottom: 2 }} />
-        )}
+        {!isLast && <div className="message-info-status-connector" />}
       </div>
-      <div style={{ paddingBottom: isLast ? 0 : 18, paddingTop: 4 }}>
-        <div style={{ fontSize: 14.5, fontWeight: 600, color: TEXT_PRIMARY }}>{label}</div>
-        <div style={{ fontSize: 13, color: done ? MUTED_COLOR : 'rgba(139,139,139,0.6)', marginTop: 2 }}>
+      <div className={`message-info-status-content ${isLast ? 'is-last' : ''}`}>
+        <div className="message-info-status-label">{label}</div>
+        <div className={`message-info-status-time ${done ? '' : 'is-pending'}`}>
           {formatted || 'Not yet'}
         </div>
       </div>
@@ -90,51 +47,53 @@ function StatusRow({ label, at, isLast }) {
   );
 }
 
-function MemberRow({ member }) {
-  const status = member.readAt
-    ? { label: `Read ${formatTimestamp(member.readAt)}`, color: READ_COLOR, Icon: CheckCheck }
-    : member.deliveredAt
-    ? { label: `Delivered ${formatTimestamp(member.deliveredAt)}`, color: MUTED_COLOR, Icon: CheckCheck }
-    : { label: 'Not delivered yet', color: 'rgba(139,139,139,0.55)', Icon: Check };
+function MemberRow({ member, type = 'read' }) {
+  const { t, i18n } = useTranslation();
+  const displayName = getDisplayName(member, i18n.language) || member.displayName || member.username;
+
+  let timestamp = null;
+  let Icon = CheckCheck;
+  let kind = 'read';
+
+  if (type === 'read') {
+    timestamp = member.readAt ? formatTimestamp(member.readAt) : null;
+    Icon = CheckCheck;
+    kind = 'read';
+  } else if (type === 'delivered') {
+    timestamp = member.deliveredAt ? formatTimestamp(member.deliveredAt) : null;
+    Icon = CheckCheck;
+    kind = 'delivered';
+  } else {
+    timestamp = null;
+    Icon = Check;
+    kind = 'pending';
+  }
 
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '9px 2px' }}>
-      <UserAvatar userId={member.userId} name={member.username} hasAvatar={member.hasAvatar} />
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div
-          style={{
-            fontSize: 14.5,
-            fontWeight: 600,
-            color: TEXT_PRIMARY,
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
-          }}
-        >
-          {member.username}
+    <div className="message-info-member-row">
+      <UserAvatar userId={member.userId} name={displayName} hasAvatar={member.hasAvatar} />
+      <div className="message-info-member-info">
+        <div className="message-info-member-name" title={displayName}>
+          {displayName}
         </div>
-        <div style={{ fontSize: 12.5, color: status.color, marginTop: 1 }}>{status.label}</div>
+        <div className={`message-info-member-status ${kind}`}>
+          {timestamp ? (
+            <bdi dir="ltr">{timestamp}</bdi>
+          ) : (
+            <span>{t('messageInfo.notDeliveredYet', 'Not delivered yet')}</span>
+          )}
+        </div>
       </div>
-      <status.Icon size={16} strokeWidth={2.5} color={status.color} style={{ flexShrink: 0 }} />
+      <Icon size={16} strokeWidth={2.5} className={`message-info-check-icon ${kind}`} />
     </div>
   );
 }
 
 function ReactionRow({ emoji, names }) {
   return (
-    <div
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: 10,
-        padding: '8px 10px',
-        borderRadius: 10,
-        background: 'rgba(0,0,0,0.03)',
-        marginBottom: 6,
-      }}
-    >
-      <span style={{ fontSize: 20, lineHeight: 1 }}>{emoji}</span>
-      <span style={{ fontSize: 13.5, color: TEXT_PRIMARY }}>{names.join(', ')}</span>
+    <div className="message-info-reaction-row">
+      <span className="message-info-reaction-emoji">{emoji}</span>
+      <span className="message-info-reaction-names">{names.join(', ')}</span>
     </div>
   );
 }
@@ -143,34 +102,13 @@ function ReplyRow({ reply, senderName, isMine, onClick }) {
   return (
     <button
       type="button"
+      className="message-info-reply-row"
       onClick={onClick}
-      style={{
-        display: 'block',
-        width: '100%',
-        textAlign: 'left',
-        background: 'rgba(0,0,0,0.03)',
-        border: 'none',
-        borderLeft: `3px solid ${READ_COLOR}`,
-        borderRadius: '4px 10px 10px 4px',
-        padding: '9px 12px',
-        marginBottom: 8,
-        cursor: 'pointer',
-      }}
     >
-      <div style={{ fontSize: 12.5, fontWeight: 600, color: READ_COLOR, marginBottom: 2 }}>
+      <div className="message-info-reply-sender">
         {isMine ? 'You' : senderName || 'Someone'}
       </div>
-      <div
-        style={{
-          fontSize: 13.5,
-          color: TEXT_PRIMARY,
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-          display: '-webkit-box',
-          WebkitLineClamp: 2,
-          WebkitBoxOrient: 'vertical',
-        }}
-      >
+      <div className="message-info-reply-text">
         {reply.text || '[attachment]'}
       </div>
     </button>
@@ -178,6 +116,7 @@ function ReplyRow({ reply, senderName, isMine, onClick }) {
 }
 
 export default function MessageInfoModal({ data, usernameById, currentUserId, onClose, onSelectReply }) {
+  const { t } = useTranslation();
   const messageId = data?.id;
   const [delivery, setDelivery] = useState(null);
   const [error, setError] = useState('');
@@ -194,7 +133,7 @@ export default function MessageInfoModal({ data, usernameById, currentUserId, on
         if (!cancelled) setDelivery(res.data.data);
       })
       .catch((err) => {
-        if (!cancelled) setError(err.response?.data?.error || 'Failed to load message info');
+        if (!cancelled) setError(err.response?.data?.error || t('messageInfo.error', 'Failed to load message info'));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -202,7 +141,7 @@ export default function MessageInfoModal({ data, usernameById, currentUserId, on
     return () => {
       cancelled = true;
     };
-  }, [messageId]);
+  }, [messageId, t]);
 
   const groupedReactions = useMemo(() => {
     const map = new Map();
@@ -218,133 +157,115 @@ export default function MessageInfoModal({ data, usernameById, currentUserId, on
   }, [data?.reactions, usernameById, currentUserId]);
 
   const replies = data?.replies || [];
-  const sortedMembers = useMemo(() => {
-    if (!delivery?.isGroup) return [];
-    return delivery.members.slice().sort((a, b) => {
-      const rank = (m) => (m.readAt ? 2 : m.deliveredAt ? 1 : 0);
-      return rank(b) - rank(a);
-    });
+  const { readMembers, deliveredMembers, pendingMembers } = useMemo(() => {
+    if (!delivery?.isGroup || !Array.isArray(delivery.members)) {
+      return { readMembers: [], deliveredMembers: [], pendingMembers: [] };
+    }
+    const read = [];
+    const delivered = [];
+    const pending = [];
+
+    for (const m of delivery.members) {
+      if (m.readAt) {
+        read.push(m);
+      }
+      if (m.deliveredAt || m.readAt) {
+        delivered.push({
+          ...m,
+          deliveredAt: m.deliveredAt || m.readAt,
+        });
+      } else {
+        pending.push(m);
+      }
+    }
+
+    read.sort((a, b) => new Date(b.readAt).getTime() - new Date(a.readAt).getTime());
+    delivered.sort((a, b) => new Date(b.deliveredAt).getTime() - new Date(a.deliveredAt).getTime());
+
+    return { readMembers: read, deliveredMembers: delivered, pendingMembers: pending };
   }, [delivery]);
 
   if (!messageId) return null;
 
   return (
     <div
+      className="message-info-overlay"
       onClick={onClose}
-      style={{
-        position: 'fixed',
-        inset: 0,
-        background: 'rgba(0,0,0,0.45)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        zIndex: 1000,
-        padding: 16,
-      }}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="message-info-title"
     >
       <div
+        className="message-info-card"
         onClick={(e) => e.stopPropagation()}
-        style={{
-          background: CARD_BG,
-          borderRadius: 16,
-          width: '100%',
-          maxWidth: 380,
-          maxHeight: '80vh',
-          display: 'flex',
-          flexDirection: 'column',
-          boxShadow: '0 12px 40px rgba(0,0,0,0.25)',
-          overflow: 'hidden',
-        }}
       >
         {/* Header */}
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            padding: '16px 18px',
-            borderBottom: `1px solid ${TRACK_COLOR}`,
-            flexShrink: 0,
-          }}
-        >
-          <h2 style={{ margin: 0, fontSize: 17, fontWeight: 700, color: TEXT_PRIMARY }}>Message info</h2>
+        <div className="message-info-header">
+          <h2 id="message-info-title">{t('messageInfo.title', 'Message info')}</h2>
           <button
             type="button"
+            className="message-info-close-btn"
             onClick={onClose}
-            aria-label="Close"
-            style={{
-              background: 'rgba(0,0,0,0.05)',
-              border: 'none',
-              borderRadius: '50%',
-              width: 30,
-              height: 30,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              cursor: 'pointer',
-              color: TEXT_PRIMARY,
-              flexShrink: 0,
-            }}
+            aria-label={t('common.close', 'Close')}
           >
             <X size={16} />
           </button>
         </div>
 
         {/* Body */}
-        <div style={{ padding: '16px 18px 22px', overflowY: 'auto' }}>
-          {loading && <div style={{ fontSize: 14, color: MUTED_COLOR, padding: '8px 0' }}>Loading…</div>}
-          {error && <div style={{ fontSize: 14, color: '#e53e3e', padding: '8px 0' }}>{error}</div>}
+        <div className="message-info-body">
+          {loading && <div className="message-info-hint">{t('common.loading', 'Loading…')}</div>}
+          {error && <div className="message-info-error">{error}</div>}
 
           {!loading && !error && delivery && !delivery.isGroup && (
-            <div>
-              <StatusRow label="Delivered" at={delivery.deliveredAt} />
-              <StatusRow label="Read" at={delivery.readAt} isLast />
+            <div className="message-info-status-list">
+              <StatusRow label={t('messageInfo.delivered', 'Delivered')} at={delivery.deliveredAt} />
+              <StatusRow label={t('messageInfo.read', 'Read')} at={delivery.readAt} isLast />
             </div>
           )}
 
           {!loading && !error && delivery && delivery.isGroup && (
-            <div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 4 }}>
-                <div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12.5, marginBottom: 5 }}>
-                    <span style={{ color: TEXT_PRIMARY, fontWeight: 600 }}>Delivered</span>
-                    <span style={{ color: MUTED_COLOR }}>
-                      {delivery.deliveredCount} of {delivery.totalRecipients}
-                    </span>
-                  </div>
-                  <ProgressBar
-                    fraction={delivery.totalRecipients ? delivery.deliveredCount / delivery.totalRecipients : 0}
-                    color={MUTED_COLOR}
-                  />
-                </div>
-                <div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12.5, marginBottom: 5 }}>
-                    <span style={{ color: TEXT_PRIMARY, fontWeight: 600 }}>Read</span>
-                    <span style={{ color: MUTED_COLOR }}>
-                      {delivery.readCount} of {delivery.totalRecipients}
-                    </span>
-                  </div>
-                  <ProgressBar
-                    fraction={delivery.totalRecipients ? delivery.readCount / delivery.totalRecipients : 0}
-                    color={READ_COLOR}
-                  />
-                </div>
-              </div>
-
-              <SectionLabel>Members</SectionLabel>
-              {sortedMembers.length === 0 ? (
-                <div style={{ fontSize: 14, color: MUTED_COLOR, padding: '8px 0' }}>
-                  No other members in this group.
+            <div className="message-info-group-summary">
+              {delivery.totalRecipients === 0 ? (
+                <div className="message-info-hint">
+                  {t('messageInfo.noOtherMembers', 'No other members in this group.')}
                 </div>
               ) : (
-                sortedMembers.map((m) => <MemberRow key={m.userId} member={m} />)
+                <>
+                  <SectionLabel>
+                    <span>{t('messageInfo.readBy', 'Read by')}</span>
+                    {' '}
+                    <bdi dir="ltr">({readMembers.length})</bdi>
+                  </SectionLabel>
+                  {readMembers.map((m) => (
+                    <MemberRow key={m.userId} member={m} type="read" />
+                  ))}
+
+                  <SectionLabel>
+                    <span>{t('messageInfo.delivered', 'Delivered')}</span>
+                    {' '}
+                    <bdi dir="ltr">({deliveredMembers.length})</bdi>
+                  </SectionLabel>
+                  {deliveredMembers.map((m) => (
+                    <MemberRow key={m.userId} member={m} type="delivered" />
+                  ))}
+
+                  <SectionLabel>
+                    <span>{t('messageInfo.notDeliveredYet', 'Not delivered yet')}</span>
+                    {' '}
+                    <bdi dir="ltr">({pendingMembers.length})</bdi>
+                  </SectionLabel>
+                  {pendingMembers.map((m) => (
+                    <MemberRow key={m.userId} member={m} type="pending" />
+                  ))}
+                </>
               )}
             </div>
           )}
 
           {groupedReactions.length > 0 && (
             <>
-              <SectionLabel>Reactions</SectionLabel>
+              <SectionLabel>{t('messageInfo.reactions', 'Reactions')}</SectionLabel>
               {groupedReactions.map((g) => (
                 <ReactionRow key={g.emoji} emoji={g.emoji} names={g.names} />
               ))}
@@ -353,7 +274,7 @@ export default function MessageInfoModal({ data, usernameById, currentUserId, on
 
           {replies.length > 0 && (
             <>
-              <SectionLabel>Replies</SectionLabel>
+              <SectionLabel>{t('messageInfo.replies', 'Replies')}</SectionLabel>
               {replies.map((r) => (
                 <ReplyRow
                   key={r.id}

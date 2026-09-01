@@ -2,12 +2,14 @@ import { Archive, BadgeCheck, Ban, Cake, Clock, Flag, Lock, Sparkles, UserMinus,
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import client, { submitReport } from '../api/client.js';
+import UserAvatar from './UserAvatar.jsx';
+import { getDisplayName } from '../utils/getDisplayName.js';
 import {
   AI_BG_THEMES,
   readStoredAiBg,
   writeStoredAiBg,
 } from '../utils/aiPanelBg.js';
-import UserAvatar from './UserAvatar.jsx';
+
 
 const REPORT_REASONS = [
   { value: 'spam', label: 'Spam' },
@@ -34,7 +36,7 @@ export default function UserProfileModal({
   onClose,
   onLoaded,
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const closeRef = useRef(null);
   const [profile, setProfile] = useState(seed);
   const [loading, setLoading] = useState(true);
@@ -140,10 +142,11 @@ export default function UserProfileModal({
     window.dispatchEvent(new CustomEvent('qc-ai-panel-bg', { detail: id }));
   }
 
-  const displayName = profile?.displayName?.trim() || profile?.username || 'User';
+  const displayName = getDisplayName(profile, i18n.language) || profile?.displayName?.trim() || profile?.username || 'User';
   const username = profile?.username || '';
   const bio = (profile?.bio || '').trim();
   const statusText = (profile?.statusText || '').trim();
+  const profileLocked = Boolean(profile?.profileLocked);
   const presence = formatPresence(profile, online);
   const keyRotated = formatKeyRotated(profile?.keyRotatedAt);
   const isAi = profile?.systemRole === 'quantum_ai' || profile?.isSystemUser;
@@ -398,7 +401,12 @@ export default function UserProfileModal({
 
             <section className="user-profile-section">
               <h3 className="user-profile-section-title">About</h3>
-              {bio ? (
+              {profileLocked ? (
+                <p className="user-profile-locked">
+                  <Lock size={14} strokeWidth={2} aria-hidden="true" />
+                  This profile is locked
+                </p>
+              ) : bio ? (
                 <p className="user-profile-bio">{bio}</p>
               ) : (
                 <p className="user-profile-empty">No bio yet</p>
@@ -417,7 +425,7 @@ export default function UserProfileModal({
                     <span>{presence?.label || 'Hidden'}</span>
                   </span>
                 </li>
-                {profile?.birthday && (
+                {profile?.birthday && !profileLocked && (
                   <li className="user-profile-meta-row">
                     <span className="user-profile-meta-icon" aria-hidden="true">
                       <Cake size={16} strokeWidth={2} />

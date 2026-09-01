@@ -4,6 +4,7 @@ import ConversationList from '../ConversationList.jsx';
 import NotificationPermissionBanner from '../NotificationPermissionBanner.jsx';
 import SidebarMenu from '../SidebarMenu.jsx';
 import StoriesRail from '../StoriesRail.jsx';
+import { getDisplayName } from '../../utils/getDisplayName.js';
 
 /**
  * Left conversation pane — list, filters, stories.
@@ -60,7 +61,7 @@ export default function ConversationPane({
   onlineUserIds,  
   onOpenStarred,
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
 
   return (
     <>
@@ -76,7 +77,7 @@ export default function ConversationPane({
               <BrandLogo size={40} />
             </div>
             <div className="sidebar-user-info">
-              <div className="sidebar-username">{user.username}</div>
+              <div className="sidebar-username">{getDisplayName(user, i18n.language) || user.username}</div>
               <div className="sidebar-lastseen sidebar-status-online">{t('common.online', 'online')}</div>
             </div>
           </div>

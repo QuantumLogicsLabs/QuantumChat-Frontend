@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { Languages } from 'lucide-react';
 import client, { unmuteChat, updatePrivacySettings } from '../api/client.js';
 import { useAuth } from '../context/AuthContext.jsx';
 import { useNotificationSettings } from '../context/NotificationSettingsContext.jsx';
@@ -135,6 +136,27 @@ export default function SettingsModal({
   );
   const [timezone, setTimezone] = useState(user?.timezone || detectBrowserTimezone());
   const timezoneOptions = useState(getTimezoneList)[0];
+  const [transliteratedNames, setTransliteratedNames] = useState(() => ({
+    ur: user?.transliteratedNames?.ur || '',
+    ar: user?.transliteratedNames?.ar || '',
+    fa: user?.transliteratedNames?.fa || '',
+    hi: user?.transliteratedNames?.hi || '',
+    zh: user?.transliteratedNames?.zh || '',
+    ru: user?.transliteratedNames?.ru || '',
+  }));
+
+  useEffect(() => {
+    if (user?.transliteratedNames) {
+      setTransliteratedNames({
+        ur: user.transliteratedNames.ur || '',
+        ar: user.transliteratedNames.ar || '',
+        fa: user.transliteratedNames.fa || '',
+        hi: user.transliteratedNames.hi || '',
+        zh: user.transliteratedNames.zh || '',
+        ru: user.transliteratedNames.ru || '',
+      });
+    }
+  }, [user]);
   const [privacy, setPrivacy] = useState({
     lastSeen: user?.privacy?.lastSeen || 'everyone',
     readReceipts: typeof user?.privacy?.readReceipts === 'boolean'
@@ -365,6 +387,7 @@ useEffect(() => {
         phone: phone.trim(),
         dateOfBirth: dateOfBirth || '',
         timezone,
+        transliteratedNames,
       });
       onUserUpdated?.(data.data);
       setOk('Profile saved');
@@ -1108,6 +1131,82 @@ useEffect(() => {
                     )}
                   </p>
                 </label>
+
+                <div className="settings-transliterations" style={{ marginTop: '1.25rem', marginBottom: '1.25rem' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
+                    <Languages size={17} strokeWidth={2} style={{ color: 'var(--accent, #6366f1)' }} />
+                    <span style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--text-primary, #fff)' }}>
+                      {t('settings.transliteration.title', 'Script Names & Transliteration')}
+                    </span>
+                  </div>
+                  <p className="settings-section-copy" style={{ marginBottom: '0.9rem', fontSize: '0.82rem' }}>
+                    {t('settings.transliteration.hint', 'When users switch their app to non-Latin scripts, your name appears in their native alphabet. You can customize your name spelling for each script below:')}
+                  </p>
+                  
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '10px' }}>
+                    <label className="settings-field" style={{ margin: 0 }}>
+                      <span style={{ fontSize: '0.8rem' }}>Urdu · اردو</span>
+                      <input
+                        dir="rtl"
+                        value={transliteratedNames.ur || ''}
+                        onChange={(e) => setTransliteratedNames(prev => ({ ...prev, ur: e.target.value }))}
+                        placeholder="زہرا"
+                        maxLength={60}
+                      />
+                    </label>
+                    <label className="settings-field" style={{ margin: 0 }}>
+                      <span style={{ fontSize: '0.8rem' }}>Arabic · العربية</span>
+                      <input
+                        dir="rtl"
+                        value={transliteratedNames.ar || ''}
+                        onChange={(e) => setTransliteratedNames(prev => ({ ...prev, ar: e.target.value }))}
+                        placeholder="زهراء"
+                        maxLength={60}
+                      />
+                    </label>
+                    <label className="settings-field" style={{ margin: 0 }}>
+                      <span style={{ fontSize: '0.8rem' }}>Persian · فارسی</span>
+                      <input
+                        dir="rtl"
+                        value={transliteratedNames.fa || ''}
+                        onChange={(e) => setTransliteratedNames(prev => ({ ...prev, fa: e.target.value }))}
+                        placeholder="زهرا"
+                        maxLength={60}
+                      />
+                    </label>
+                    <label className="settings-field" style={{ margin: 0 }}>
+                      <span style={{ fontSize: '0.8rem' }}>Hindi · हिन्दी</span>
+                      <input
+                        dir="ltr"
+                        value={transliteratedNames.hi || ''}
+                        onChange={(e) => setTransliteratedNames(prev => ({ ...prev, hi: e.target.value }))}
+                        placeholder="ज़हरा"
+                        maxLength={60}
+                      />
+                    </label>
+                    <label className="settings-field" style={{ margin: 0 }}>
+                      <span style={{ fontSize: '0.8rem' }}>Chinese · 简体中文</span>
+                      <input
+                        dir="ltr"
+                        value={transliteratedNames.zh || ''}
+                        onChange={(e) => setTransliteratedNames(prev => ({ ...prev, zh: e.target.value }))}
+                        placeholder="扎赫拉"
+                        maxLength={60}
+                      />
+                    </label>
+                    <label className="settings-field" style={{ margin: 0 }}>
+                      <span style={{ fontSize: '0.8rem' }}>Russian · Русский</span>
+                      <input
+                        dir="ltr"
+                        value={transliteratedNames.ru || ''}
+                        onChange={(e) => setTransliteratedNames(prev => ({ ...prev, ru: e.target.value }))}
+                        placeholder="Захра"
+                        maxLength={60}
+                      />
+                    </label>
+                  </div>
+                </div>
+
                 <button type="button" className="settings-btn primary" disabled={busy} onClick={saveProfile}>
                   {busy ? t('common.saving', 'Saving…') : t('settings.profile.saveProfile', 'Save profile')}
                 </button>
