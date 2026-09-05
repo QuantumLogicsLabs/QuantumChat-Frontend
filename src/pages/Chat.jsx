@@ -23,7 +23,7 @@ import { useTranslation } from "react-i18next";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { getDisplayName } from "../utils/getDisplayName.js";
 import { streamQuantumAI } from "../api/aiClient.js";
-import { fetchChatTheme, fetchThemeCatalog, fetchWallpaperImageUrl } from '../api/chatThemes.js';
+import { fetchChatTheme, fetchThemeCatalog, fetchWallpaperImageUrl, fetchGroupChatTheme, fetchGroupWallpaperImageUrl } from '../api/chatThemes.js';
 import client, { muteChat, unmuteChat } from "../api/client.js";
 import { postPresenceHeartbeat } from "../api/presence.js";
 import { connectSocket, getSocket } from "../api/socket.js";
@@ -154,6 +154,7 @@ import {
 } from "../utils/readState.js";
 import { shouldEnforceScreenshotProtection } from "../utils/screenshotProtection.js";
 import { playReceiveSound, playSendSound, startIncomingRingSound, unlockAudio } from "../utils/sounds.js";
+
 const DEFAULT_CHAT_THEME = { presetId: 'default', bubbleColorId: 'default', wallpaperId: 'none' };
 
 const MAX_VOICE_SECONDS = 60;
@@ -436,17 +437,18 @@ export default function Chat() {
       .catch(() => { }); // Non-critical — the picker just won't open without it; chat still works.
   }, [hasLocalKeyring]);
 
-  useEffect(() => {
+ useEffect(() => {
     setThemeModalOpen(false);
 
-    if (!selected || selected.type !== "dm") {
+    if (!selected || (selected.type !== "dm" && selected.type !== "group")) {
       setChatTheme(DEFAULT_CHAT_THEME);
       return;
     }
 
     let cancelled = false;
+    const fetcher = selected.type === "group" ? fetchGroupChatTheme : fetchChatTheme;
 
-    fetchChatTheme(selected.id).then((theme) => {
+    fetcher(selected.id).then((theme) => {
       if (!cancelled) {
         setChatTheme(theme);
       }
@@ -460,10 +462,10 @@ export default function Chat() {
   // The custom wallpaper endpoint returns raw bytes (auth-gated, owner-only)
   // rather than a public URL, so it has to be fetched as a blob and turned
   // into an object URL, same as attachment previews elsewhere in this app.
-  useEffect(() => {
+useEffect(() => {
     if (
       !selected ||
-      selected.type !== "dm" ||
+      (selected.type !== "dm" && selected.type !== "group") ||
       chatTheme.wallpaperId !== "custom"
     ) {
       setCustomWallpaperUrl(null);
@@ -472,8 +474,9 @@ export default function Chat() {
 
     let cancelled = false;
     let urlToRevoke = null;
+    const fetchUrl = selected.type === "group" ? fetchGroupWallpaperImageUrl : fetchWallpaperImageUrl;
 
-    fetchWallpaperImageUrl(selected.id).then((url) => {
+    fetchUrl(selected.id).then((url) => {
       if (cancelled) {
         URL.revokeObjectURL(url);
         return;
@@ -6480,10 +6483,10 @@ export default function Chat() {
                     onClearChat={handleClearChat}
                     onSearch={() => setSearchOpen(true)}
                     onWallpaper={
-                      selected.type === "dm" && !selected.isSelfChat
-                        ? () => setThemeModalOpen(true)
-                        : undefined
-                    }
+  selected.type === "group" || (selected.type === "dm" && !selected.isSelfChat)
+    ? () => setThemeModalOpen(true)
+    : undefined
+}
                     onStarred={() => {
                       setStarredScope("chat");
                       setShowStarredMessages(true);
@@ -7053,15 +7056,16 @@ export default function Chat() {
           </>
         )}
       </main>
-      {themeModalOpen && selected && (
-        <ChatThemeModal
-          peerId={selected.id}
-          theme={chatTheme}
-          catalog={themeCatalog}
-          onApplied={(updated) => setChatTheme(updated)}
-          onClose={() => setThemeModalOpen(false)}
-        />
-      )}
+      {themeModalOpen && selected && (selected.type === "dm" || selected.type === "group") && (
+  <ChatThemeModal
+    peerId={selected.type === "dm" ? selected.id : undefined}
+    groupId={selected.type === "group" ? selected.id : undefined}
+    theme={chatTheme}
+    catalog={themeCatalog}
+    onApplied={(updated) => setChatTheme(updated)}
+    onClose={() => setThemeModalOpen(false)}
+  />
+)}
 
       {aiPanelOpen && (
         <AIAssistantPanel
@@ -7210,16 +7214,19 @@ export default function Chat() {
       )}
 
       {showGroupSettings && activeGroup && (
-        <GroupSettingsModal
-          group={activeGroup}
-          currentUserId={user.id}
-          users={users}
-          onClose={() => setShowGroupSettings(false)}
-          onUpdated={mergeUpdatedGroup}
-          onLeftOrDeleted={handleLeftOrDeletedGroup}
-        />
-      )}
-
+  <GroupSettingsModal
+    group={activeGroup}
+    currentUserId={user.id}
+    users={users}
+    onClose={() => setShowGroupSettings(false)}
+    onUpdated={mergeUpdatedGroup}
+    onLeftOrDeleted={handleLeftOrDeletedGroup}
+    onOpenChatTheme={() => {
+      setShowGroupSettings(false);
+      setThemeModalOpen(true);
+    }}
+  />
+)}
       {profileUserId && (
         <UserProfileModal
           userId={profileUserId}
