@@ -27,7 +27,7 @@ function isWithinDoNotDisturb(dnd) {
  *
  * kind: 'dm' | 'group' | 'status' | 'call'
  */
-export function shouldNotify(notifSettings, { kind, isMention = false } = {}) {
+export function shouldNotify(notifSettings, { kind, isMention = false, isAnnouncement = false } = {}) {
   if (!notifSettings) return true; // fail-open before settings load
   if (isWithinDoNotDisturb(notifSettings.doNotDisturb)) return false;
   if (notifSettings.priority === 'silent') return false;
