@@ -10279,6 +10279,35 @@ body.theme-dark .story-drafts-sheet {
   background: var(--accent-muted, rgba(13, 148, 136, 0.1));
 }
 
+.story-drafts-status {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  font-size: 13px;
+  line-height: 1.4;
+  background: rgba(59, 130, 246, 0.12);
+  border: 1px solid rgba(59, 130, 246, 0.35);
+  color: #bfdbfe;
+}
+
+.story-drafts-status.success {
+  background: rgba(16, 185, 129, 0.14);
+  border-color: rgba(16, 185, 129, 0.4);
+  color: #a7f3d0;
+}
+
+[data-theme='light'] .story-drafts-status,
+body.theme-light .story-drafts-status {
+  color: #1d4ed8;
+  background: rgba(59, 130, 246, 0.1);
+}
+
+[data-theme='light'] .story-drafts-status.success,
+body.theme-light .story-drafts-status.success {
+  color: #047857;
+  background: rgba(16, 185, 129, 0.12);
+}
+
 .story-history-tabs {
   display: flex;
   gap: 6px;

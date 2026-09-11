@@ -2,6 +2,7 @@ import { Clock, Eye, Pencil, Trash2, Upload } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import client from '../api/client.js';
+import { useToast } from './ToastProvider.jsx';
 import { defaultScheduleLocalValue } from './StoryPublishControls.jsx';
 
 const TTL_PRESETS = [
@@ -34,9 +35,11 @@ function defaultScheduleLocalValueFromIso(iso) {
 }
 
 export default function StoryDraftsPanel({ open, onClose, onError, onChanged, onPreviewDraft }) {
+  const { showToast } = useToast();
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(false);
   const [busyId, setBusyId] = useState(null);
+  const [statusMessage, setStatusMessage] = useState('');
   const [editId, setEditId] = useState(null);
   const [editTtl, setEditTtl] = useState(TTL_PRESETS[2].ms);
   const [editAllowReplies, setEditAllowReplies] = useState(true);
@@ -59,6 +62,7 @@ export default function StoryDraftsPanel({ open, onClose, onError, onChanged, on
   useEffect(() => {
     if (!open) return undefined;
     setEditId(null);
+    setStatusMessage('');
     load();
     function onKey(e) {
       if (e.key === 'Escape') onClose?.();
@@ -110,15 +114,26 @@ export default function StoryDraftsPanel({ open, onClose, onError, onChanged, on
   /** Publish immediately — no extra confirmation. */
   async function publishNow(id) {
     setBusyId(id);
+    setStatusMessage('Publishing your status…');
+    showToast('Publishing your status…', 'info');
     try {
-      await client.post(`/stories/${id}/publish`);
+      await client.post(`/stories/${id}/publish`, {});
       const next = items.filter((i) => i.id !== id);
       setItems(next);
       setEditId(null);
+      setStatusMessage('Status published');
+      showToast('Status published', 'success');
       onChanged?.();
-      if (next.length === 0) onClose?.();
+      if (next.length === 0) {
+        // Brief pause so the success toast/message is readable before the panel closes.
+        setTimeout(() => onClose?.(), 700);
+      } else {
+        setTimeout(() => setStatusMessage(''), 2500);
+      }
     } catch (err) {
-      onError?.(err.response?.data?.error || err.message || 'Failed to publish');
+      const msg = err.response?.data?.error || err.message || 'Failed to publish';
+      setStatusMessage('');
+      onError?.(msg);
     } finally {
       setBusyId(null);
     }
@@ -170,10 +185,23 @@ export default function StoryDraftsPanel({ open, onClose, onError, onChanged, on
         </div>
         <p className="status-create-subtitle">Edit, preview, schedule, or publish when ready</p>
 
+        {statusMessage ? (
+          <p
+            className={`story-drafts-status${statusMessage.toLowerCase().includes('published') ? ' success' : ''}`}
+            role="status"
+            aria-live="polite"
+          >
+            {statusMessage}
+          </p>
+        ) : null}
+
         {loading && <p className="empty-hint">Loading…</p>}
-        {!loading && items.length === 0 && (
+        {!loading && items.length === 0 && !statusMessage && (
           <p className="empty-hint">No drafts or scheduled statuses yet.</p>
         )}
+        {!loading && items.length === 0 && statusMessage ? (
+          <p className="empty-hint">Your status is live on My status.</p>
+        ) : null}
 
         <ul className="story-drafts-list">
           {items.map((item) => {
