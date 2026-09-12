@@ -191,6 +191,7 @@ export default function SettingsModal({
     whoCanCreateGroupsWithMe: user?.privacy?.whoCanCreateGroupsWithMe || 'everyone',
     groupMentions: user?.privacy?.groupMentions || 'everyone',
     screenshotProtection: user?.privacy?.screenshotProtection === true,
+    viewStoriesAnonymously: user?.privacy?.viewStoriesAnonymously === true,
   });
   const [friendsList, setFriendsList] = useState([]);
 
@@ -519,7 +520,23 @@ export default function SettingsModal({
       setBusy(false);
     }
   }
-
+  /**
+   * Turning this ON is a one-way trade-off the user might not fully register from
+   * the hint text alone — it also silently disables their own "who viewed my
+   * story" list. Confirm explicitly before flipping it on. Turning it back off
+   * has no such downside, so that direction needs no confirmation.
+   */
+  function toggleViewStoriesAnonymously(nextVal) {
+    if (nextVal === true) {
+      const confirmed = window.confirm(
+        'Turn on "View stories anonymously"?\n\n' +
+          "You'll no longer see who viewed your own stories while this is on — only the view count. " +
+          'You can turn it back off anytime to see viewer names again.'
+      );
+      if (!confirmed) return;
+    }
+    updatePrivacyField('viewStoriesAnonymously', nextVal);
+  }
   function toggleSelectedFriend(friendId) {
     const current = new Set(privacy.onlineStatusVisibleTo || []);
     if (current.has(friendId)) {
@@ -1558,7 +1575,15 @@ export default function SettingsModal({
                       )}
                     </div>
                   )}
-
+                  <ToggleRow
+                    label="View stories anonymously"
+                    hint="Your name is hidden when you view others' stories — but you also won't be able to see who viewed yours"
+                    checked={privacy.viewStoriesAnonymously === true}
+                    disabled={busy}
+                    onChange={toggleViewStoriesAnonymously}
+                    className="settings-toggle-tile"
+                    showStatusBadge={true}
+                  />
                   <PrivacySelect
                     label="Last Seen"
                     description="Who can see your last active time"

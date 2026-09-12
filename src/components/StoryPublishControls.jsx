@@ -24,6 +24,7 @@ export function useStoryPublishOptions(initialTtl = DEFAULT_TTL_MS) {
   const [customValue, setCustomValue] = useState(24);
   const [customUnit, setCustomUnit] = useState('hours');
   const [allowReplies, setAllowReplies] = useState(true);
+  const [viewOnce, setViewOnce] = useState(false);
   const [scheduleMode, setScheduleMode] = useState(false);
   const [scheduleLocal, setScheduleLocal] = useState(defaultScheduleLocalValue);
 
@@ -42,7 +43,7 @@ export function useStoryPublishOptions(initialTtl = DEFAULT_TTL_MS) {
   }
 
   function buildOptions(status) {
-    const opts = { status: status || 'published' };
+    const opts = { status: status || 'published', viewOnce };
     if (opts.status === 'scheduled') {
       const at = new Date(scheduleLocal);
       if (Number.isNaN(at.getTime()) || at.getTime() <= Date.now() + 30_000) {
@@ -64,6 +65,8 @@ export function useStoryPublishOptions(initialTtl = DEFAULT_TTL_MS) {
     setCustomUnit,
     allowReplies,
     setAllowReplies,
+    viewOnce,
+    setViewOnce,
     scheduleMode,
     setScheduleMode,
     scheduleLocal,
@@ -184,7 +187,17 @@ export function StoryPublishControls({
           Allow replies to this story
         </span>
       </label>
-
+              <label className="story-composer-ttl story-composer-check">
+        <input
+          type="checkbox"
+          checked={opts.viewOnce}
+          disabled={busy}
+          onChange={(e) => opts.setViewOnce(e.target.checked)}
+        />
+        <span className="story-composer-ttl-label" style={{ margin: 0 }}>
+          View once — disappears for each viewer right after they open it
+        </span>
+      </label>
       <div className="story-schedule-block">
         <label className="story-composer-check">
           <input

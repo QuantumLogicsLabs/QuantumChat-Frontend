@@ -186,6 +186,7 @@ const StoriesRail = forwardRef(function StoriesRail({ currentUser, users = [], o
  const [historyTab, setHistoryTab] = useState('drafts');
   const [draftCount, setDraftCount] = useState(0);
   const [fabHost, setFabHost] = useState(null);
+
   const mediaInputRef = useRef(null);
   const audioInputRef = useRef(null);
   const grouped = useMemo(() => {
@@ -484,6 +485,7 @@ const StoriesRail = forwardRef(function StoriesRail({ currentUser, users = [], o
       form.append('durationMs', String(durationMs));
       form.append('ttlMs', String(ttlMs));
       form.append('allowReplies', String(allowReplies));
+      form.append('viewOnce', String(Boolean(options.viewOnce)));
       form.append('status', status);
       if (status === 'scheduled' && options.publishAt) {
         form.append('publishAt', options.publishAt);
@@ -592,6 +594,7 @@ const StoriesRail = forwardRef(function StoriesRail({ currentUser, users = [], o
       <p className="stories-privacy-note">
         Sealed stories use X5 envelopes so allowed contacts can decrypt; the server only stores ciphertext.
       </p>
+
 
       <div className="story-add-wrap">
         <button
@@ -909,7 +912,7 @@ const StoriesRail = forwardRef(function StoriesRail({ currentUser, users = [], o
 export default StoriesRail;
 
 /** Full-screen "Viewed by N" sheet, opened from the eye icon in StoryViewer. */
-function StoryViewersSheet({ viewerCount, viewers, onClose }) {
+function StoryViewersSheet({ viewerCount, viewers, viewersHidden, viewersHiddenReason, onClose }) {
   return (
     <div className="story-viewers-sheet-overlay" onClick={onClose}>
       <div className="story-viewers-sheet" onClick={(e) => e.stopPropagation()}>
@@ -920,7 +923,11 @@ function StoryViewersSheet({ viewerCount, viewers, onClose }) {
           </button>
         </div>
         <div className="story-viewers-sheet-list">
-          {viewers.length === 0 ? (
+          {viewersHidden ? (
+            <p className="empty-hint">
+              {viewersHiddenReason || 'Viewer identities are hidden while "View stories anonymously" is on'}
+            </p>
+          ) : viewers.length === 0 ? (
             <p className="empty-hint">No views yet</p>
           ) : (
             viewers.map((v) => (
@@ -946,6 +953,8 @@ function StoryViewersSheet({ viewerCount, viewers, onClose }) {
 function StoryViewer({ group, startIndex, currentUserId, users = [], onClose, onDeleted, onError }) {
   const [viewerCount, setViewerCount] = useState(0);
   const [viewers, setViewers] = useState([]);
+  const [viewersHidden, setViewersHidden] = useState(false);
+  const [viewersHiddenReason, setViewersHiddenReason] = useState('');
   const [viewersOpen, setViewersOpen] = useState(false);
   const [index, setIndex] = useState(startIndex || 0);
   const [mediaUrl, setMediaUrl] = useState(null);
@@ -993,7 +1002,11 @@ function StoryViewer({ group, startIndex, currentUserId, users = [], onClose, on
     setDownloadPct(null);
     setSaveHighlightOpen(false);
 
-    if (!isOwn) {
+    // The view-once "consumed" flag is written by this /view ping. It must fire
+    // AFTER the media has actually loaded — never before or concurrently — or a
+    // view-once story can consume itself before its very first viewer sees it.
+    function pingViewed() {
+      if (isOwn) return;
       client.post(`/stories/${story.id}/view`).catch(() => {
         // Non-critical — a failed view-ping shouldn't block story viewing.
       });
@@ -1007,6 +1020,7 @@ function StoryViewer({ group, startIndex, currentUserId, users = [], onClose, on
         usedCache = true;
         setMediaUrl(cachedUrl);
         setMediaBlob(cachedBlob);
+        pingViewed();
         return;
       }
 
@@ -1049,6 +1063,7 @@ function StoryViewer({ group, startIndex, currentUserId, users = [], onClose, on
         setMediaUrl(objectUrl);
         setMediaBlob(blob);
         setLoadPhase('');
+        pingViewed();
         return;
       }
 
@@ -1072,6 +1087,7 @@ function StoryViewer({ group, startIndex, currentUserId, users = [], onClose, on
       setMediaUrl(objectUrl);
       setMediaBlob(blob);
       setLoadPhase('');
+      pingViewed();
     })().catch((err) => {
       if (err.name === 'CanceledError' || err.name === 'AbortError') return;
 
@@ -1146,6 +1162,8 @@ function StoryViewer({ group, startIndex, currentUserId, users = [], onClose, on
           .then((res) => {
             setViewerCount(res.data?.data?.viewerCount || 0);
             setViewers(res.data?.data?.viewers || []);
+            setViewersHidden(Boolean(res.data?.data?.viewersHidden));
+            setViewersHiddenReason(res.data?.data?.viewersHiddenReason || '');
           })
           .catch(() => {});
       }, 8000);
@@ -1155,6 +1173,7 @@ function StoryViewer({ group, startIndex, currentUserId, users = [], onClose, on
     function onViewed(payload) {
       if (String(payload.storyId) !== String(story.id)) return;
       setViewerCount(payload.viewerCount);
+      if (payload.anonymous || !payload.viewer) return; // count only, identity withheld
       setViewers((prev) => [
         { ...payload.viewer, viewedAt: payload.viewedAt },
         ...prev.filter((v) => v.id !== payload.viewer.id),
@@ -1173,6 +1192,8 @@ function StoryViewer({ group, startIndex, currentUserId, users = [], onClose, on
         if (cancelled) return;
         setViewerCount(res.data?.data?.viewerCount || 0);
         setViewers(res.data?.data?.viewers || []);
+        setViewersHidden(Boolean(res.data?.data?.viewersHidden));
+        setViewersHiddenReason(res.data?.data?.viewersHiddenReason || '');
       })
       .catch(() => {});
     return () => {
@@ -1687,6 +1708,8 @@ function StoryViewer({ group, startIndex, currentUserId, users = [], onClose, on
           <StoryViewersSheet
             viewerCount={viewerCount}
             viewers={viewers}
+            viewersHidden={viewersHidden}
+            viewersHiddenReason={viewersHiddenReason}
             onClose={() => setViewersOpen(false)}
           />
         )}
