@@ -1,18 +1,13 @@
 import { useEffect, useRef } from 'react';
 
-
 /**
  * Best-effort screenshot / screen-capture protection for the web app.
  *
- * Applied on the viewer's device when viewing content from someone who enabled
- * screenshot protection — not on the account owner's own device.
- *
- * Browsers cannot fully block OS screenshots. This hook only:
- * - Flashes a privacy overlay on known screenshot shortcuts (PrintScreen / macOS)
- * - Briefly blurs UI while the tab is actually hidden (visibilitychange)
- *
- * It does NOT blur on window focus loss — that fires constantly (DevTools,
- * OS notifications, clicking outside the browser) and made the app unusable.
+ * Browsers cannot fully block OS screenshots. This hook:
+ * - Instantly blacks out the viewport on known capture shortcuts
+ * - Blacks out while the tab is hidden (helps Snipping Tool / app switch)
+ * - Holds the blackout briefly after the tab returns (capture often finishes then)
+ * - Notifies via onAttempt (debounced)
  *
  * Mobile apps use FLAG_SECURE / iOS capture APIs for stronger enforcement.
  */
@@ -20,6 +15,8 @@ export function useScreenshotProtection(enabled, { onAttempt, scope = 'chat' } =
   const onAttemptRef = useRef(onAttempt);
   onAttemptRef.current = onAttempt;
   const flashTimerRef = useRef(null);
+  const holdTimerRef = useRef(null);
+  const lastNotifyAtRef = useRef(0);
 
   useEffect(() => {
     if (!enabled || typeof document === 'undefined') return undefined;
@@ -27,10 +24,9 @@ export function useScreenshotProtection(enabled, { onAttempt, scope = 'chat' } =
     const root = document.documentElement;
     root.classList.add('qc-screenshot-protection');
     root.dataset.qcProtectScope = scope;
-    // Never leave a stale blur from a previous session / focus race.
     root.classList.remove('qc-screenshot-blur');
 
-    function flashPrivacyOverlay(reason) {
+    function ensureOverlay() {
       let overlay = document.getElementById('qc-screenshot-flash');
       if (!overlay) {
         overlay = document.createElement('div');
@@ -39,73 +35,114 @@ export function useScreenshotProtection(enabled, { onAttempt, scope = 'chat' } =
         overlay.setAttribute('aria-hidden', 'true');
         document.body.appendChild(overlay);
       }
-      overlay.classList.add('is-active');
-      if (flashTimerRef.current) window.clearTimeout(flashTimerRef.current);
-      flashTimerRef.current = window.setTimeout(() => {
-        overlay.classList.remove('is-active');
-      }, 900);
+      return overlay;
+    }
+
+    function notify(reason) {
+      const now = Date.now();
+      // Avoid toast spam when keydown+keyup both fire.
+      if (now - lastNotifyAtRef.current < 1600) return;
+      lastNotifyAtRef.current = now;
       onAttemptRef.current?.(reason || 'screenshot');
     }
 
-    function isScreenshotChord(e) {
+    function setBlackout(active) {
+      const overlay = ensureOverlay();
+      if (active) {
+        // Force a synchronous paint path: no fade-in (OS often captures within ms).
+        overlay.style.transition = 'none';
+        overlay.classList.add('is-active');
+        // Re-enable fade-out for when we clear.
+        requestAnimationFrame(() => {
+          overlay.style.transition = '';
+        });
+      } else {
+        overlay.classList.remove('is-active');
+      }
+    }
+
+    function flashPrivacyOverlay(reason, holdMs = 1100) {
+      if (flashTimerRef.current) window.clearTimeout(flashTimerRef.current);
+      if (holdTimerRef.current) window.clearTimeout(holdTimerRef.current);
+      setBlackout(true);
+      notify(reason);
+      flashTimerRef.current = window.setTimeout(() => {
+        setBlackout(false);
+      }, holdMs);
+    }
+
+    function isPrintScreen(e) {
       const key = e.key || '';
       const code = e.code || '';
-      // Windows / Linux PrintScreen
-      if (key === 'PrintScreen' || code === 'PrintScreen') return true;
-      // Windows Snipping Tool (Win+Shift+S) — the most common modern
-      // Windows screenshot method, previously undetected entirely. The OS
-      // shell intercepts this before the page in some configurations, so
-      // this still won't catch every case — but it does fire as a normal
-      // keydown in enough real-world setups to be worth listening for.
+      // keyCode 44 = PrintScreen (still set on some browsers)
+      return (
+        key === 'PrintScreen' ||
+        code === 'PrintScreen' ||
+        e.keyCode === 44 ||
+        e.which === 44
+      );
+    }
+
+    function isScreenshotChord(e) {
+      if (isPrintScreen(e)) return true;
+
+      // Windows Snipping Tool: Win+Shift+S
       if (e.shiftKey && !e.ctrlKey && !e.altKey) {
-        const k = key.toLowerCase();
-        if ((k === 's' || code === 'KeyS') && (e.metaKey || e.getModifierState?.('Meta') || e.getModifierState?.('OS'))) {
-          return true;
-        }
+        const k = String(e.key || '').toLowerCase();
+        const win =
+          e.metaKey ||
+          e.getModifierState?.('Meta') ||
+          e.getModifierState?.('OS') ||
+          e.getModifierState?.('Super');
+        if (win && (k === 's' || e.code === 'KeyS')) return true;
       }
-      // macOS: Cmd+Shift+3/4/5 (full / selection / recording)
-      // Do not treat Ctrl+Shift+S as a screenshot — browsers use it for Save.
+
+      // macOS: Cmd+Shift+3/4/5
       if (e.metaKey && e.shiftKey && !e.ctrlKey && !e.altKey) {
-        const k = key.toLowerCase();
+        const k = String(e.key || '').toLowerCase();
         if (k === '3' || k === '4' || k === '5') return true;
-        if (code === 'Digit3' || code === 'Digit4' || code === 'Digit5') return true;
+        if (e.code === 'Digit3' || e.code === 'Digit4' || e.code === 'Digit5') return true;
       }
+
       return false;
     }
 
-    function onKeyDown(e) {
+    function onCaptureKey(e) {
       if (!isScreenshotChord(e)) return;
-      flashPrivacyOverlay('screenshot');
+      // Cannot cancel OS capture, but blackout ASAP.
+      flashPrivacyOverlay('screenshot', 1200);
     }
 
     function onVisibility() {
       if (document.visibilityState === 'hidden') {
-        root.classList.add('qc-screenshot-blur');
-      } else {
-        root.classList.remove('qc-screenshot-blur');
+        if (flashTimerRef.current) window.clearTimeout(flashTimerRef.current);
+        if (holdTimerRef.current) window.clearTimeout(holdTimerRef.current);
+        setBlackout(true);
+        notify('screen-capture');
+        return;
       }
+      // Tab visible again — keep blackout briefly (Snipping Tool / Share often
+      // finishes the grab after focus returns).
+      if (holdTimerRef.current) window.clearTimeout(holdTimerRef.current);
+      holdTimerRef.current = window.setTimeout(() => {
+        if (document.visibilityState === 'visible') setBlackout(false);
+      }, 900);
     }
 
-    // Safety net: if blur somehow sticks while the tab is visible, clear it.
-    function clearStaleBlur() {
-      if (document.visibilityState === 'visible') {
-        root.classList.remove('qc-screenshot-blur');
-      }
-    }
-
-    document.addEventListener('keydown', onKeyDown, true);
+    // Capture phase so we run before other handlers.
+    document.addEventListener('keydown', onCaptureKey, true);
+    // PrintScreen often only surfaces on keyup in Chromium/Windows.
+    document.addEventListener('keyup', onCaptureKey, true);
     document.addEventListener('visibilitychange', onVisibility);
-    window.addEventListener('focus', clearStaleBlur);
-    document.addEventListener('pointerdown', clearStaleBlur, true);
 
     return () => {
-      document.removeEventListener('keydown', onKeyDown, true);
+      document.removeEventListener('keydown', onCaptureKey, true);
+      document.removeEventListener('keyup', onCaptureKey, true);
       document.removeEventListener('visibilitychange', onVisibility);
-      window.removeEventListener('focus', clearStaleBlur);
-      document.removeEventListener('pointerdown', clearStaleBlur, true);
       root.classList.remove('qc-screenshot-protection', 'qc-screenshot-blur');
       delete root.dataset.qcProtectScope;
       if (flashTimerRef.current) window.clearTimeout(flashTimerRef.current);
+      if (holdTimerRef.current) window.clearTimeout(holdTimerRef.current);
       document.getElementById('qc-screenshot-flash')?.remove();
     };
   }, [enabled, scope]);

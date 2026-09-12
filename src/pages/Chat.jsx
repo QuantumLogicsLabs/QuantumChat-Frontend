@@ -2989,16 +2989,17 @@ useEffect(() => {
         users,
         groups,
         resolveDmPeer,
+        viewerPrivacy: user?.privacy,
       }),
-    [user?.id, selected, profileUserId, users, groups, resolveDmPeer],
+    [user?.id, user?.privacy, selected, profileUserId, users, groups, resolveDmPeer],
   );
   useScreenshotProtection(screenshotProtectionOn, {
     scope: "chat",
     onAttempt: (reason) => {
       showToast(
         reason === "screenshot"
-          ? "Screenshot blocked — this contact protects their content"
-          : "Screen capture blocked — this contact protects their content",
+          ? "Screenshot blocked — this chat is protected"
+          : "Screen capture blocked — this chat is protected",
         "info",
         3500,
       );
@@ -6388,7 +6389,14 @@ useEffect(() => {
                       </span>
                     )}
                     <div className="chat-header-text">
-                      <span className="chat-header-title">{title}</span>
+                      <span className="chat-header-title">
+                        {title}
+                        {screenshotProtectionOn ? (
+                          <span className="chat-screenshot-shield" title="Screenshot protection is active in this chat">
+                            Protected
+                          </span>
+                        ) : null}
+                      </span>
                       {headerSubtitle && (
                         <span
                           className={`chat-header-status ${headerOnline ? "status-online" : ""}`}

@@ -26,6 +26,10 @@ export function groupHasProtectedMember(group, viewerId, usersList = []) {
 
 /**
  * Whether the current viewer should enforce screenshot protection.
+ * Enforced when:
+ * - Viewing a DM/profile/group that includes someone who enabled protection, OR
+ * - The viewer enabled protection themselves and has a chat/profile open
+ *   (so the setting works when testing on your own device on web).
  */
 export function shouldEnforceScreenshotProtection({
   viewerId,
@@ -34,7 +38,12 @@ export function shouldEnforceScreenshotProtection({
   users = [],
   groups = [],
   resolveDmPeer,
+  viewerPrivacy,
 }) {
+  if (viewerPrivacy?.screenshotProtection === true && (selected || profileUserId)) {
+    return true;
+  }
+
   if (
     profileUserId &&
     String(profileUserId) !== String(viewerId)
@@ -52,9 +61,9 @@ export function shouldEnforceScreenshotProtection({
       selected.isSelfChat ||
       String(selected.id) === String(viewerId)
     ) {
-      return false;
+      return Boolean(viewerPrivacy?.screenshotProtection);
     }
-    const peer = resolveDmPeer?.(selected);
+    const peer = resolveDmPeer?.(selected) || selected.peer;
     return userRequiresScreenshotProtection(peer);
   }
 

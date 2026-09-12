@@ -5221,6 +5221,9 @@ body.theme-light .settings-field select option {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
 }
 
 .chat-header-title.muted {
@@ -19216,24 +19219,40 @@ div.view-once-lock {
   background: #000;
   opacity: 0;
   pointer-events: none;
-  transition: opacity 40ms linear;
+  /* Fade-out only — activate with transition:none in JS for instant blackout */
+  transition: opacity 180ms linear;
 }
 .qc-screenshot-flash.is-active {
   opacity: 1;
 }
 
-html.qc-screenshot-protection.qc-screenshot-blur .chat-page,
-html.qc-screenshot-protection.qc-screenshot-blur .user-profile-modal,
-html.qc-screenshot-protection.qc-screenshot-blur .settings-modal,
-html.qc-screenshot-protection.qc-screenshot-blur .qc-shell {
-  filter: blur(18px);
-  transition: filter 80ms ease;
+/* Do not permanently disable text selection — that made chats feel broken.
+   Selection is only blocked while the privacy flash is active. */
+html.qc-screenshot-protection .qc-screenshot-flash.is-active {
+  pointer-events: none;
 }
 
-html.qc-screenshot-protection .chat-page,
-html.qc-screenshot-protection .user-profile-modal {
-  -webkit-user-select: none;
-  user-select: none;
+.chat-screenshot-shield {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 8px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: #a7f3d0;
+  background: rgba(16, 185, 129, 0.14);
+  border: 1px solid rgba(16, 185, 129, 0.35);
+  white-space: nowrap;
+}
+
+[data-theme='light'] .chat-screenshot-shield,
+body.theme-light .chat-screenshot-shield {
+  color: #047857;
+  background: rgba(16, 185, 129, 0.12);
+  border-color: rgba(4, 120, 87, 0.28);
 }
 
 /* Media send preview (view once at send time) */

@@ -504,7 +504,15 @@ export default function SettingsModal({
         const socket = getSocket() || connectSocket();
         socket?.emit('privacy:typing-indicator', { enabled: Boolean(val) });
       }
-      setOk('Privacy settings saved');
+      if (key === 'screenshotProtection') {
+        setOk(
+          val
+            ? 'Screenshot protection on — open a chat, then try Print Screen to test'
+            : 'Screenshot protection off'
+        );
+      } else {
+        setOk('Privacy settings saved');
+      }
     } catch (err) {
       setError(err.response?.data?.error || 'Failed to save privacy');
     } finally {
@@ -1757,10 +1765,10 @@ export default function SettingsModal({
                   </span>
                 </div>
                 <p className="settings-section-copy">
-                  When enabled, other people cannot screenshot or screen-record your
-                  chats and profile on their device where the platform supports it.
-                  You can still capture your own screen normally. On web, viewers get
-                  a blank screen and alert when a capture shortcut is detected.
+                  When enabled, screenshot and screen-capture shortcuts are blocked
+                  while you (or others) are viewing chats and profiles — best-effort
+                  on web (black screen + alert), stronger on the mobile app.
+                  Open a chat after enabling to activate protection on this device.
                 </p>
 
                 <div className="settings-shield-badges">
@@ -1780,7 +1788,7 @@ export default function SettingsModal({
 
                 <ToggleRow
                   label="Screenshot protection"
-                  hint="Stop others from screenshotting or recording your chats and profile"
+                  hint="Block screenshots in chats on this device and for people viewing your chats"
                   checked={privacy.screenshotProtection === true}
                   disabled={busy}
                   onChange={(v) => updatePrivacyField('screenshotProtection', v)}
