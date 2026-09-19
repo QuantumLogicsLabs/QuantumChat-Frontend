@@ -92,6 +92,13 @@ import { useScreenshotProtection } from "../hooks/useScreenshotProtection.js";
 import useWebRTCCall from "../hooks/useWebRTCCall.js";
 import { getWallpaperBackground, getWallpaperFx, preloadWallpaper } from '../theme/wallpaperBackgrounds.js';
 import activityStore from "../utils/activityStore.js";
+import { getOfflineMedia, removeOfflineMedia, saveOfflineMedia, updateOfflineMedia } from "../utils/offlineMediaQueue.js";
+import {
+  getAllOfflineMessages,
+  getOfflineMessages,
+  removeOfflineMessage,
+  saveOfflineMessage,
+} from "../utils/offlineMessageQueue.js";
 import {
   getArchivedChatKeys,
   getPinnedChatKeys,
@@ -555,6 +562,7 @@ useEffect(() => {
   const usersRef = useRef([]);
   const groupsRef = useRef([]);
   const storiesRailRef = useRef(null);
+  const retryingOutboxRef = useRef(new Set());
   selectedRef.current = selected;
   userRef.current = user;
   messagesRef.current = messages;
@@ -573,6 +581,20 @@ useEffect(() => {
       "typing:stop",
       target.to ? { to: target.to } : { groupId: target.groupId },
     );
+  }
+
+  function pendingMessageFromOutbox(entry) {
+    return {
+      id: `outbox-${entry.id}`,
+      _id: `outbox-${entry.id}`,
+      from: user.id,
+      ...(entry.type === "group" ? { group: entry.conversationId } : { to: entry.conversationId }),
+      text: entry.displayText,
+      createdAt: entry.queuedAt,
+      _status: "waiting",
+      _pending: true,
+      replyTo: entry.replyTo || null,
+    };
   }
 
   function syncTypingPrivacy() {
@@ -2566,6 +2588,9 @@ useEffect(() => {
       .then((res) => {
         if (cancelled) return;
         const next = (res.data.data || []).map((raw) => decorateRef.current(raw));
+        getOfflineMessages(user.id, threadKey).then((queued) => {
+          if (!cancelled) setMessages([...next, ...queued.map(pendingMessageFromOutbox)]);
+        });
         setHasMoreMessages(Boolean(res.data.meta?.hasMore));
         oldestCreatedAtRef.current = next[0]?.createdAt || null;
         if (next.length) {
@@ -3734,7 +3759,7 @@ useEffect(() => {
 
   async function sendGroupPayload(
     plaintext,
-    { kind, mentionedUserIds, tempId, displayText, replyToId, attachmentId, viewOnce } = {},
+    { kind, mentionedUserIds, tempId, displayText, replyToId, attachmentId, viewOnce, clientMessageId } = {},
   ) {
     if (!selected || selected.type !== "group") {
       throw new Error("No group selected");
@@ -3747,6 +3772,7 @@ useEffect(() => {
     }
     const isPublic = group.visibility === "public";
     const payload = { kind: kind || "text" };
+    if (clientMessageId) payload.clientMessageId = clientMessageId;
     if (isPublic) {
       payload.content = plaintext;
     } else {
@@ -3760,10 +3786,21 @@ useEffect(() => {
     if (disappearSeconds > 0) payload.expiresInSeconds = disappearSeconds;
     const forwardPolicy = buildForwardPolicy();
     if (forwardPolicy) payload.forwardPolicy = forwardPolicy;
+    if (clientMessageId) {
+      await saveOfflineMessage(user.id, {
+        id: clientMessageId,
+        type: "group",
+        conversationId: selected.id,
+        conversationKey: selected.key,
+        displayText: displayText ?? plaintext,
+        payload,
+      });
+    }
     const { data } = await client.post(
       `/groups/${selected.id}/messages`,
       payload,
     );
+    if (clientMessageId) await removeOfflineMessage(user.id, clientMessageId);
     recordActivityFromMessage(data.data);
     setMessages((prev) =>
       mergeConfirmedMessage(prev, {
@@ -3774,6 +3811,52 @@ useEffect(() => {
     );
     return data.data;
   }
+
+  async function retryOfflineMessage(entry) {
+    if (!entry?.id || retryingOutboxRef.current.has(entry.id)) return;
+    retryingOutboxRef.current.add(entry.id);
+    try {
+      const endpoint = entry.type === "group"
+        ? `/groups/${entry.conversationId}/messages`
+        : "/messages";
+      const { data } = await client.post(endpoint, entry.payload);
+      await removeOfflineMessage(user.id, entry.id);
+      recordActivityFromMessage(data.data);
+      setMessages((prev) =>
+        mergeConfirmedMessage(prev, {
+          tempId: `outbox-${entry.id}`,
+          serverRaw: data.data,
+          displayText: entry.displayText,
+        }),
+      );
+      playSendSound();
+    } catch {
+      // Keep the encrypted request in the outbox for the next reconnect.
+    } finally {
+      retryingOutboxRef.current.delete(entry.id);
+    }
+  }
+
+  function isRetryableSendError(err) {
+    if (err?.code === "OUTBOX_UNAVAILABLE") return false;
+    const status = err?.response?.status;
+    return !status || status === 408 || status === 429 || status >= 500;
+  }
+
+  async function retryOfflineMessages(conversationKey) {
+    if (!navigator.onLine || !user?.id) return;
+    const entries = conversationKey
+      ? await getOfflineMessages(user.id, conversationKey)
+      : await getAllOfflineMessages(user.id);
+    await Promise.all(entries.map((entry) => retryOfflineMessage(entry)));
+  }
+
+  useEffect(() => {
+    const retry = () => retryOfflineMessages();
+    window.addEventListener("online", retry);
+    retry();
+    return () => window.removeEventListener("online", retry);
+  }, [selected?.key, user?.id]);
 
   async function saveEncryptedAINote(text) {
     if (!selected || !text?.trim()) return;
@@ -4467,7 +4550,8 @@ useEffect(() => {
           }
         }
         const kind = asAnnouncement ? "announcement" : "text";
-        const tempId = `tmp-${crypto.randomUUID()}`;
+        const clientMessageId = crypto.randomUUID();
+        const tempId = `outbox-${clientMessageId}`;
         const replySnapshot = replyTo;
         const draftSnapshot = draft;
 
@@ -4507,6 +4591,7 @@ useEffect(() => {
             kind,
             mentionedUserIds,
             tempId,
+            clientMessageId,
             displayText: plaintext,
             replyToId: replySnapshot
               ? replySnapshot.id || replySnapshot._id
@@ -4516,11 +4601,16 @@ useEffect(() => {
             await invokeGroupQuantumAI(bodyText, group);
           }
         } catch (err) {
-          setMessages((prev) =>
-            prev.filter((m) => String(m.id || m._id) !== tempId),
-          );
-          setDraft(draftSnapshot);
-          setReplyTo(replySnapshot);
+          if (isRetryableSendError(err)) {
+            setMessages((prev) => prev.map((m) =>
+              String(m.id || m._id) === tempId ? { ...m, _status: "waiting" } : m,
+            ));
+          } else {
+            await removeOfflineMessage(user.id, clientMessageId);
+            setMessages((prev) => prev.filter((m) => String(m.id || m._id) !== tempId));
+            setDraft(draftSnapshot);
+            setReplyTo(replySnapshot);
+          }
           throw err;
         }
       } else {
@@ -4533,7 +4623,8 @@ useEffect(() => {
         }
         const draftSnapshot = draft;
         const replySnapshot = replyTo;
-        const tempId = `tmp-${crypto.randomUUID()}`;
+        const clientMessageId = crypto.randomUUID();
+        const tempId = `outbox-${clientMessageId}`;
         const plaintext = draft;
 
         setDraft("");
@@ -4569,11 +4660,21 @@ useEffect(() => {
           const forRecipient = sealMessage(plaintext, pickRandom(recipientKeys));
           const forSender = sealMessage(plaintext, myKey.publicKey);
           const body = { to: selected.id, forRecipient, forSender };
+          body.clientMessageId = clientMessageId;
           if (replySnapshot) body.replyTo = replySnapshot.id || replySnapshot._id;
           if (disappearSeconds > 0) body.expiresInSeconds = disappearSeconds;
           const forwardPolicy = buildForwardPolicy();
           if (forwardPolicy) body.forwardPolicy = forwardPolicy;
+          await saveOfflineMessage(user.id, {
+            id: clientMessageId,
+            type: "dm",
+            conversationId: selected.id,
+            conversationKey: selected.key,
+            displayText: plaintext,
+            payload: body,
+          });
           const { data } = await client.post("/messages", body);
+          await removeOfflineMessage(user.id, clientMessageId);
           recordActivityFromMessage(data.data);
           setMessages((prev) =>
             mergeConfirmedMessage(prev, {
@@ -4583,11 +4684,16 @@ useEffect(() => {
             }),
           );
         } catch (err) {
-          setMessages((prev) =>
-            prev.filter((m) => String(m.id || m._id) !== tempId),
-          );
-          setDraft(draftSnapshot);
-          setReplyTo(replySnapshot);
+          if (isRetryableSendError(err)) {
+            setMessages((prev) => prev.map((m) =>
+              String(m.id || m._id) === tempId ? { ...m, _status: "waiting" } : m,
+            ));
+          } else {
+            await removeOfflineMessage(user.id, clientMessageId);
+            setMessages((prev) => prev.filter((m) => String(m.id || m._id) !== tempId));
+            setDraft(draftSnapshot);
+            setReplyTo(replySnapshot);
+          }
           throw err;
         }
       }
@@ -4688,7 +4794,7 @@ useEffect(() => {
     );
     return undefined;
   }
-  async function sendAttachmentFile(file, { plainBytes, quiet, viewOnce = false } = {}) {
+  async function sendAttachmentFile(file, { plainBytes, quiet, viewOnce = false, offlineId, skipOutbox = false, offlineEntry } = {}) {
     if (
       !file ||
       !selected ||
@@ -4704,18 +4810,45 @@ useEffect(() => {
       return;
     }
 
-    const uploadId = crypto.randomUUID();
+    const uploadId = offlineId || crypto.randomUUID();
     const controller = new AbortController();
     setUploads((prev) => [
       ...prev,
       { id: uploadId, name: file.name, progress: 0, controller },
     ]);
+    const pendingMessageId = `outbox-${uploadId}`;
+    setMessages((prev) => {
+      if (prev.some((message) => String(message.id || message._id) === pendingMessageId)) return prev;
+      return [...prev, {
+        id: pendingMessageId,
+        _id: pendingMessageId,
+        from: user.id,
+        ...(selected.type === "group" ? { group: selected.id } : { to: selected.id }),
+        text: file.name || "Attachment",
+        createdAt: new Date().toISOString(),
+        _status: "sending",
+        _pending: true,
+        _mediaPending: true,
+      }];
+    });
 
     try {
       if (selected.type === "group") {
         const fileBytes =
           plainBytes || new Uint8Array(await file.arrayBuffer());
         const sealed = await secretboxSealAsync(fileBytes);
+        if (!skipOutbox) await saveOfflineMedia(user.id, {
+          id: uploadId,
+          type: "group",
+          conversationId: selected.id,
+          conversationKey: selected.key,
+          filename: file.name,
+          mimetype: file.type || "application/octet-stream",
+          viewOnce,
+          sealedKey: sealed.key,
+          sealedNonce: sealed.nonce,
+          sourceBytes: fileBytes,
+        });
         const mimeType = file.type || "application/octet-stream";
         const cipherBlob = new Blob([sealed.cipherBytes], { type: mimeType });
         const useChunked = sealed.cipherBytes.byteLength > CHUNK_SIZE;
@@ -4724,6 +4857,7 @@ useEffect(() => {
           "/attachments/init",
           {
             groupId: selected.id,
+            clientUploadId: uploadId,
             secretboxNonce: sealed.nonce,
             filename: file.name,
             mimetype: mimeType,
@@ -4731,7 +4865,11 @@ useEffect(() => {
           },
           { signal: controller.signal },
         );
-        const { pendingUploadId } = initRes.data.data;
+        const initData = initRes.data.data;
+        const pendingUploadId = initData.pendingUploadId;
+        let attachment = initData.finalizedAttachmentId
+          ? { id: initData.finalizedAttachmentId, filename: file.name, mimetype: mimeType, size: file.size }
+          : null;
 
         const onRecipientProgress = (event) => {
           if (!event.total) return;
@@ -4744,7 +4882,7 @@ useEffect(() => {
           );
         };
 
-        const recipientDirectUploadId = useChunked
+        const recipientDirectUploadId = attachment ? undefined : (useChunked
           ? await putCiphertextChunked(sealed.cipherBytes, {
               pendingUploadId,
               slot: "recipient",
@@ -4756,18 +4894,20 @@ useEffect(() => {
               slot: "recipient",
               signal: controller.signal,
               onProgress: onRecipientProgress,
-            });
-
-        const finalizeRes = await client.post(
-          "/attachments/finalize",
-          { pendingUploadId, recipientDirectUploadId },
-          { signal: controller.signal },
-        );
-        const attachment = finalizeRes.data.data;
+            }));
+        if (!attachment) {
+          const finalizeRes = await client.post(
+            "/attachments/finalize",
+            { pendingUploadId: initData.pendingUploadId, clientUploadId: uploadId, recipientDirectUploadId },
+            { signal: controller.signal },
+          );
+          attachment = finalizeRes.data.data;
+          await updateOfflineMedia(user.id, uploadId, { finalizedAttachmentId: attachment.id });
+        }
         const plaintext = encodeGroupFile({
           attachmentId: attachment.id,
-          key: sealed.key,
-          nonce: sealed.nonce,
+          key: offlineEntry?.sealedKey || sealed.key,
+          nonce: offlineEntry?.sealedNonce || sealed.nonce,
           filename: attachment.filename || file.name,
           mimetype:
             attachment.mimetype || file.type || "application/octet-stream",
@@ -4777,8 +4917,11 @@ useEffect(() => {
         await sendGroupPayload(plaintext, {
           kind: "file",
           attachmentId: attachment.id,
+          clientMessageId: uploadId,
+          tempId: pendingMessageId,
           ...(wantViewOnce ? { viewOnce: true } : {}),
         });
+        await removeOfflineMedia(user.id, uploadId);
         playSendSound();
         if (!quiet) showToast("File sent successfully", "success", 3000);
         setTimeout(() => scrollToBottom("smooth"), 50);
@@ -4794,6 +4937,16 @@ useEffect(() => {
       }
       const recipientPublicKey = pickRandom(recipientKeys);
       const fileBytes = plainBytes || new Uint8Array(await file.arrayBuffer());
+      if (!skipOutbox) await saveOfflineMedia(user.id, {
+        id: uploadId,
+        type: "dm",
+        conversationId: selected.id,
+        conversationKey: selected.key,
+        filename: file.name,
+        mimetype: file.type || "application/octet-stream",
+        viewOnce,
+        sourceBytes: fileBytes,
+      });
       // Safe to run concurrently: each call only transfers its OWN output
       // buffer back (see cryptoWorker.js) — fileBytes itself is never
       // transferred, so there's nothing shared to race on.
@@ -4814,6 +4967,7 @@ useEffect(() => {
         "/attachments/init",
         {
           recipientId: selected.id,
+          clientUploadId: uploadId,
           filename: file.name,
           mimetype: mimeType,
           size: recipientBlob.size,
@@ -4826,7 +4980,10 @@ useEffect(() => {
         },
         { signal: controller.signal },
       );
-      const { pendingUploadId, sender } = initRes.data.data;
+      const initData = initRes.data.data;
+      const existingAttachmentId = initData.finalizedAttachmentId;
+      const pendingUploadId = initData.pendingUploadId;
+      const sender = initData.sender;
 
       let recipientLoaded = 0;
       let senderLoaded = 0;
@@ -4841,7 +4998,7 @@ useEffect(() => {
           prev.map((u) => (u.id === uploadId ? { ...u, progress } : u)),
         );
       };
-      const recipientUploadPromise = useChunked
+      const recipientUploadPromise = existingAttachmentId ? Promise.resolve(undefined) : (useChunked
         ? putCiphertextChunked(forRecipientFile.cipherBytes, {
             pendingUploadId,
             slot: "recipient",
@@ -4859,9 +5016,9 @@ useEffect(() => {
               recipientLoaded = event.loaded || 0;
               reportProgress();
             },
-          });
+          }));
 
-      const senderUploadPromise = sender
+      const senderUploadPromise = existingAttachmentId ? Promise.resolve(undefined) : (sender
         ? useChunked
           ? putCiphertextChunked(forSenderFile.cipherBytes, {
               pendingUploadId,
@@ -4881,7 +5038,7 @@ useEffect(() => {
                 reportProgress();
               },
             })
-        : Promise.resolve(undefined);
+        : Promise.resolve(undefined));
 
       // Recipient and sender ciphertext are independent objects server-side
       // — concurrent upload roughly halves wall-clock time versus two full
@@ -4891,17 +5048,22 @@ useEffect(() => {
         senderUploadPromise,
       ]);
 
-      const finalizeRes = await client.post(
-        "/attachments/finalize",
-        { pendingUploadId, recipientDirectUploadId, senderDirectUploadId },
-        { signal: controller.signal },
-      );
-      const attachmentId = finalizeRes.data.data.id;
+      let attachmentId = existingAttachmentId;
+      if (!attachmentId) {
+        const finalizeRes = await client.post(
+          "/attachments/finalize",
+          { pendingUploadId, clientUploadId: uploadId, recipientDirectUploadId, senderDirectUploadId },
+          { signal: controller.signal },
+        );
+        attachmentId = finalizeRes.data.data.id;
+        await updateOfflineMedia(user.id, uploadId, { finalizedAttachmentId: attachmentId });
+      }
 
       const forRecipient = sealMessage("", recipientPublicKey);
       const forSender = sealMessage("", myKey.publicKey);
       const msgBody = {
         to: selected.id,
+        clientMessageId: uploadId,
         forRecipient,
         forSender,
         attachmentId,
@@ -4912,12 +5074,13 @@ useEffect(() => {
       const forwardPolicy = buildForwardPolicy();
       if (forwardPolicy && !wantViewOnce) msgBody.forwardPolicy = forwardPolicy;
       const { data } = await client.post("/messages", msgBody);
+      await removeOfflineMedia(user.id, uploadId);
       recordActivityFromMessage(data.data);
-      setMessages((prev) => {
-        const id = String(data.data.id || data.data._id);
-        if (prev.some((m) => String(m.id || m._id) === id)) return prev;
-        return [...prev, decorate(data.data)];
-      });
+      setMessages((prev) => mergeConfirmedMessage(prev, {
+        tempId: pendingMessageId,
+        serverRaw: data.data,
+        displayText: file.name,
+      }));
       playSendSound();
       if (!quiet) showToast("File sent successfully", "success", 3000);
       setTimeout(() => scrollToBottom("smooth"), 50);
@@ -4932,10 +5095,46 @@ useEffect(() => {
           "error",
         );
       }
+      if (isRetryableSendError(err)) {
+        setMessages((prev) => prev.map((message) =>
+          String(message.id || message._id) === pendingMessageId
+            ? { ...message, _status: "waiting" }
+            : message,
+        ));
+      } else {
+        setMessages((prev) => prev.filter((message) => String(message.id || message._id) !== pendingMessageId));
+      }
     } finally {
       setUploads((prev) => prev.filter((u) => u.id !== uploadId));
     }
   }
+
+  async function retryOfflineMediaForSelection() {
+    if (!navigator.onLine || !user?.id || !selected?.key) return;
+    const entries = (await getOfflineMedia(user.id)).filter(
+      (entry) => entry.conversationKey === selected.key,
+    );
+    for (const entry of entries) {
+      const file = new File([entry.sourceBytes], entry.filename || 'attachment', {
+        type: entry.mimetype || 'application/octet-stream',
+      });
+      await sendAttachmentFile(file, {
+        plainBytes: entry.sourceBytes,
+        viewOnce: entry.viewOnce === true,
+        offlineId: entry.id,
+        skipOutbox: true,
+        offlineEntry: entry,
+        quiet: true,
+      });
+    }
+  }
+
+  useEffect(() => {
+    const retry = () => retryOfflineMediaForSelection().catch(() => {});
+    window.addEventListener('online', retry);
+    retry();
+    return () => window.removeEventListener('online', retry);
+  }, [selected?.key, user?.id]);
   async function sendAttachmentFiles(filesOrFile, { viewOnce = false } = {}) {
     const list = Array.isArray(filesOrFile)
       ? filesOrFile

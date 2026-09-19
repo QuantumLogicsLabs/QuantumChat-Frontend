@@ -100,6 +100,17 @@ function ReadReceipt({ status }) {
     );
   }
 
+  if (status === 'waiting') {
+    return (
+      <span className="read-receipt sending" title="Waiting for connection">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+          <circle cx="12" cy="12" r="9" opacity="0.35" />
+          <path d="M12 7v5l3 2" />
+        </svg>
+      </span>
+    );
+  }
+
   if (status === 'sent') {
     return (
       <span className="read-receipt sent" title="Sent">

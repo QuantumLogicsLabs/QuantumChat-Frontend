@@ -30,6 +30,7 @@ import TextStoryComposer from './TextStoryComposer.jsx';
 import { useToast } from './ToastProvider.jsx';
 import UserAvatar from './UserAvatar.jsx';
 import { compressVideo } from '../crypto/videoCompressor.js';
+import { getOfflineMedia, removeOfflineMedia, saveOfflineMedia } from '../utils/offlineMediaQueue.js';
 const MAX_STORY_SECONDS = 60;
 const MAX_STORY_UPLOAD_BYTES = 95 * 1024 * 1024; // stay under server 100MB limit
 const COMPRESS_IF_LARGER_THAN = 4 * 1024 * 1024; // compress status videos over ~4MB
@@ -457,7 +458,20 @@ const StoriesRail = forwardRef(function StoriesRail({ currentUser, users = [], o
       }
 
       const status = options.status || 'published';
+      const clientStoryId = options.clientStoryId || crypto.randomUUID();
+      if (!options.skipOutbox) {
+        await saveOfflineMedia(currentUser.id, {
+          id: clientStoryId,
+          type: 'story',
+          conversationKey: `story:${currentUser.id}`,
+          filename: fileToUpload.name || 'story.bin',
+          mimetype: fileToUpload.type || 'application/octet-stream',
+          sourceBytes: new Uint8Array(await fileToUpload.arrayBuffer()),
+          storyOptions: { ttlMs, allowReplies, options: { ...options, clientStoryId, skipOutbox: true } },
+        });
+      }
       const form = new FormData();
+      form.append('clientStoryId', clientStoryId);
       const canSeal = typeof crypto !== 'undefined' && crypto.subtle;
 
       if (canSeal) {
@@ -542,6 +556,7 @@ const StoriesRail = forwardRef(function StoriesRail({ currentUser, users = [], o
 
       setUploadPhase('upload');
       await client.post('/stories', form, { timeout: 5 * 60 * 1000 });
+      await removeOfflineMedia(currentUser.id, clientStoryId);
       if (status === 'published') await loadStories();
       await loadDraftsCount();
       return true;
@@ -554,6 +569,21 @@ const StoriesRail = forwardRef(function StoriesRail({ currentUser, users = [], o
       setUploadPhase('');
     }
   }
+
+  useEffect(() => {
+    async function retryStories() {
+      if (!navigator.onLine || !currentUser?.id) return;
+      const pending = (await getOfflineMedia(currentUser.id)).filter((entry) => entry.type === 'story');
+      for (const entry of pending) {
+        const file = new File([entry.sourceBytes], entry.filename || 'story.bin', { type: entry.mimetype || 'application/octet-stream' });
+        await uploadStory(file, entry.storyOptions?.ttlMs, entry.storyOptions?.allowReplies, entry.storyOptions?.options || {});
+      }
+    }
+    const retry = () => retryStories().catch(() => {});
+    window.addEventListener('online', retry);
+    retry();
+    return () => window.removeEventListener('online', retry);
+  }, [currentUser?.id]);
 
   function closeComposer() {
     if (pendingPreviewUrl) URL.revokeObjectURL(pendingPreviewUrl);
