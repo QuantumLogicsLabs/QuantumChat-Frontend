@@ -14,8 +14,14 @@ function base64ToBytes(b64) {
 }
 
 export async function aesGcmDecryptBytes(cipherBytes, keyB64, ivB64) {
-  const key = await crypto.subtle.importKey('raw', base64ToBytes(keyB64), { name: 'AES-GCM' }, false, ['decrypt']);
-  const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: base64ToBytes(ivB64) }, key, cipherBytes);
+  const key = await crypto.subtle.importKey('raw', base64ToBytes(keyB64), { name: 'AES-GCM' }, false, [
+    'decrypt',
+  ]);
+  const plain = await crypto.subtle.decrypt(
+    { name: 'AES-GCM', iv: base64ToBytes(ivB64) },
+    key,
+    cipherBytes,
+  );
   return new Uint8Array(plain);
 }
 
@@ -53,14 +59,22 @@ export function unlockStoryKey(story, currentUserId) {
       : null;
 
     if (hinted) {
-      const payload = tryParseKeyPayload(unsealMessage(envelope, hinted));
-      if (payload) return { ok: true, payload };
+      try {
+        const payload = tryParseKeyPayload(unsealMessage(envelope, hinted));
+        if (payload) return { ok: true, payload };
+      } catch {
+        // try next key
+      }
     }
 
     for (const entry of ring) {
       if (hinted && entry.secretKey === hinted) continue;
-      const payload = tryParseKeyPayload(unsealMessage(envelope, entry.secretKey));
-      if (payload) return { ok: true, payload };
+      try {
+        const payload = tryParseKeyPayload(unsealMessage(envelope, entry.secretKey));
+        if (payload) return { ok: true, payload };
+      } catch {
+        // try next key
+      }
     }
   }
 
@@ -77,67 +91,112 @@ export function viewerCanSeeStory(story, currentUserId) {
 export const storyMediaCache = new Map();
 /** Parallel blob cache so highlights can upload without re-fetching. */
 export const storyMediaBlobCache = new Map();
-/** In-flight downloads so viewer + prefetch share one network round-trip. */
+
+/**
+ * In-flight downloads keyed by cache key.
+ * Shared across viewer + prefetch, but NOT tied to any single AbortSignal —
+ * aborting one viewer must not strand other waiters (or a Strict-Mode remount)
+ * on a forever "Still loading…" state.
+ */
 const storyInflight = new Map();
 
 export function cacheKeyForStory(story) {
   return `${story.id}:${story.sealed ? '1' : '0'}:${story.contentIv || ''}`;
 }
 
+function throwIfAborted(signal) {
+  if (signal?.aborted) {
+    throw new DOMException('Aborted', 'AbortError');
+  }
+}
+
 /**
  * Fetch + (if needed) decrypt a story's media and return a Blob.
- * Concurrent callers share one in-flight request per story.
+ * Concurrent callers share one network round-trip per story.
+ * Caller abort only cancels *that* waiter's result — the download continues
+ * so a remount / prefetch can still finish and populate the cache.
  */
 export async function resolveStoryMediaBlob(story, currentUserId, options = {}) {
-  const { signal, onDownloadProgress } = options;
+  const { signal, onDownloadProgress, precomputedUnlock } = options;
   const cacheKey = cacheKeyForStory(story);
   const cachedBlob = storyMediaBlobCache.get(cacheKey);
-  if (cachedBlob) return cachedBlob;
+  if (cachedBlob) {
+    throwIfAborted(signal);
+    return cachedBlob;
+  }
 
-  const existing = storyInflight.get(cacheKey);
-  if (existing) return existing;
+  throwIfAborted(signal);
 
-  const promise = (async () => {
-    if (story.sealed) {
-      const unlocked = unlockStoryKey(story, currentUserId);
-      const ivB64 = unlocked?.payload?.ivB64 || story.contentIv;
-      if (!unlocked?.ok || !unlocked?.payload?.keyB64 || !ivB64) {
-        throw new Error('No decryption key available for this story');
+  let entry = storyInflight.get(cacheKey);
+  if (!entry) {
+    const promise = (async () => {
+      if (story.sealed) {
+        const unlocked = precomputedUnlock || unlockStoryKey(story, currentUserId);
+        const ivB64 = unlocked?.payload?.ivB64 || story.contentIv;
+        if (!unlocked?.ok || !unlocked?.payload?.keyB64 || !ivB64) {
+          throw new Error('No decryption key available for this story');
+        }
+        const res = await client.get(`/stories/${story.id}/media`, {
+          responseType: 'arraybuffer',
+          timeout: 45_000,
+          onDownloadProgress,
+        });
+        const cipherBytes = new Uint8Array(res.data);
+        const plain = await aesGcmDecryptBytes(
+          cipherBytes,
+          unlocked.payload.keyB64,
+          ivB64,
+        );
+        const blob = new Blob([plain], {
+          type: story.mimetype || 'application/octet-stream',
+        });
+        if (!storyMediaCache.has(cacheKey)) {
+          storyMediaCache.set(cacheKey, URL.createObjectURL(blob));
+        }
+        storyMediaBlobCache.set(cacheKey, blob);
+        return blob;
       }
+
       const res = await client.get(`/stories/${story.id}/media`, {
-        responseType: 'arraybuffer',
-        timeout: 90_000,
-        signal,
+        responseType: 'blob',
+        timeout: 45_000,
         onDownloadProgress,
       });
-      if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
-      const cipherBytes = new Uint8Array(res.data);
-      const plain = await aesGcmDecryptBytes(cipherBytes, unlocked.payload.keyB64, ivB64);
-      const blob = new Blob([plain], { type: story.mimetype || 'application/octet-stream' });
+      const blob = res.data;
       if (!storyMediaCache.has(cacheKey)) {
         storyMediaCache.set(cacheKey, URL.createObjectURL(blob));
       }
       storyMediaBlobCache.set(cacheKey, blob);
       return blob;
-    }
-
-    const res = await client.get(`/stories/${story.id}/media`, {
-      responseType: 'blob',
-      timeout: 90_000,
-      signal,
-      onDownloadProgress,
+    })().finally(() => {
+      storyInflight.delete(cacheKey);
     });
-    if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
-    const blob = res.data;
-    if (!storyMediaCache.has(cacheKey)) {
-      storyMediaCache.set(cacheKey, URL.createObjectURL(blob));
-    }
-    storyMediaBlobCache.set(cacheKey, blob);
-    return blob;
-  })().finally(() => {
-    storyInflight.delete(cacheKey);
-  });
 
-  storyInflight.set(cacheKey, promise);
-  return promise;
+    entry = { promise };
+    storyInflight.set(cacheKey, entry);
+  }
+
+  // If this waiter aborts, reject locally without cancelling the shared fetch.
+  let blob;
+  if (!signal) {
+    blob = await entry.promise;
+  } else {
+    blob = await Promise.race([
+      entry.promise,
+      new Promise((_, reject) => {
+        if (signal.aborted) {
+          reject(new DOMException('Aborted', 'AbortError'));
+          return;
+        }
+        signal.addEventListener(
+          'abort',
+          () => reject(new DOMException('Aborted', 'AbortError')),
+          { once: true },
+        );
+      }),
+    ]);
+  }
+
+  throwIfAborted(signal);
+  return blob;
 }

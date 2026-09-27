@@ -147,7 +147,7 @@ export default function ChatOptionsMenu({
               <ImageIcon size={15} /> {t('chat.chatMedia', 'Chat media')}
             </button>
             <button type="button" role="menuitem" onClick={() => run(onStarred)}>
-              <Star size={15} /> {t('chat.starredMessages', 'Starred messages')}
+              <Star size={15} /> {t('chat.starredMessages', 'Important messages')}
             </button>
             {onWallpaper && (
               <button type="button" role="menuitem" onClick={() => run(onWallpaper)}>

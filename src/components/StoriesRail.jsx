@@ -2,6 +2,19 @@ import { BookmarkPlus, Camera, ChevronRight, Eye, FilePen, Forward, ImagePlus, M
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import client from '../api/client.js';
+import { connectSocket, getSocket } from '../api/socket.js';
+import { useAuth } from '../context/AuthContext.jsx';
+import { KEY_SET_SIZE, pickRandom, sealBytes, sealMessage } from '../crypto/keys.js';
+import {
+  findSecretKeyForPublicKey,
+  getCurrentKeySet,
+  getKeyringSyncStatus,
+  getStoredUser
+} from '../crypto/keyStorage.js';
+import { compressVideo } from '../crypto/videoCompressor.js';
+import { COMPOSER_EMOJIS, searchEmojis } from '../utils/emojis.js';
+import { playNotificationSound, shouldNotify, showNotificationPopup } from '../utils/notificationDispatch.js';
+import { getOfflineMedia, removeOfflineMedia, saveOfflineMedia } from '../utils/offlineMediaQueue.js';
 import {
   cacheKeyForStory,
   resolveStoryMediaBlob,
@@ -10,26 +23,14 @@ import {
   unlockStoryKey,
   viewerCanSeeStory,
 } from '../utils/storyMedia.js';
-import { connectSocket, getSocket } from '../api/socket.js';
-import { useAuth } from '../context/AuthContext.jsx';
-import { KEY_SET_SIZE, pickRandom, sealBytes, sealMessage, unsealMessage } from '../crypto/keys.js';
-import {
-  findSecretKeyForPublicKey,
-  getCurrentKeySet,
-  getKeyring,
-  getKeyringSyncStatus,
-  getStoredUser
-} from '../crypto/keyStorage.js';
-import { COMPOSER_EMOJIS, searchEmojis } from '../utils/emojis.js';
-import { playNotificationSound, shouldNotify, showNotificationPopup } from '../utils/notificationDispatch.js';
 import ConfirmDialog from './ConfirmDialog.jsx';
 import HighlightPickerSheet from './HighlightPickerSheet.jsx';
+import StoryCaptionOverlay from './StoryCaptionOverlay.jsx';
 import StoryHistoryPanel from './StoryHistoryPanel.jsx';
 import { StoryLocalPreview, StoryPublishControls, useStoryPublishOptions } from './StoryPublishControls.jsx';
 import TextStoryComposer from './TextStoryComposer.jsx';
 import { useToast } from './ToastProvider.jsx';
 import UserAvatar from './UserAvatar.jsx';
-import { compressVideo } from '../crypto/videoCompressor.js';
 const MAX_STORY_SECONDS = 60;
 const MAX_STORY_UPLOAD_BYTES = 95 * 1024 * 1024; // stay under server 100MB limit
 const COMPRESS_IF_LARGER_THAN = 4 * 1024 * 1024; // compress status videos over ~4MB
@@ -172,6 +173,7 @@ const StoriesRail = forwardRef(function StoriesRail({ currentUser, users = [], o
   const [stories, setStories] = useState([]);
   const [storiesLoading, setStoriesLoading] = useState(true);
   const [viewer, setViewer] = useState(null);
+  const [storyMentions, setStoryMentions] = useState([]);
   const [uploading, setUploading] = useState(false);
   const [uploadPhase, setUploadPhase] = useState(''); // '', 'compress', 'encrypt', 'upload'
   const [composerError, setComposerError] = useState('');
@@ -189,6 +191,12 @@ const StoriesRail = forwardRef(function StoriesRail({ currentUser, users = [], o
 
   const mediaInputRef = useRef(null);
   const audioInputRef = useRef(null);
+  const storyFriends = useMemo(() => {
+      const friendSet = new Set((currentUser?.friends || []).map(String));
+      return (users || [])
+        .filter((u) => u?.id && friendSet.has(String(u.id)))
+        .map((u) => ({ id: String(u.id), username: u.username, hasAvatar: u.hasAvatar }));
+    }, [users, currentUser?.friends]);
   const grouped = useMemo(() => {
     const map = new Map();
     for (const story of stories) {
@@ -476,7 +484,20 @@ const StoriesRail = forwardRef(function StoriesRail({ currentUser, users = [], o
       }
 
       const status = options.status || 'published';
+      const clientStoryId = options.clientStoryId || crypto.randomUUID();
+      if (!options.skipOutbox) {
+        await saveOfflineMedia(currentUser.id, {
+          id: clientStoryId,
+          type: 'story',
+          conversationKey: `story:${currentUser.id}`,
+          filename: fileToUpload.name || 'story.enc',
+          mimetype: fileToUpload.type || 'application/octet-stream',
+          sourceBytes: new Uint8Array(await fileToUpload.arrayBuffer()),
+          storyOptions: { ttlMs, allowReplies, options: { ...options, clientStoryId, skipOutbox: true } },
+        });
+      }
       const form = new FormData();
+      form.append('clientStoryId', clientStoryId);
       const canSeal = typeof crypto !== 'undefined' && crypto.subtle;
 
       if (canSeal) {
@@ -535,7 +556,7 @@ const StoriesRail = forwardRef(function StoriesRail({ currentUser, users = [], o
         form.append(
           'file',
           new Blob([sealed.cipherBytes], { type: 'application/octet-stream' }),
-          fileToUpload.name || 'story.bin'
+          'story.enc'
         );
         form.append('sealed', 'true');
         const mime =
@@ -554,6 +575,14 @@ const StoriesRail = forwardRef(function StoriesRail({ currentUser, users = [], o
       form.append('ttlMs', String(ttlMs));
       form.append('allowReplies', String(allowReplies));
       form.append('viewOnce', String(Boolean(options.viewOnce)));
+      form.append('caption', options.caption || '');
+      form.append('captionMode', options.captionMode || 'fixed');
+      if (Array.isArray(options.mentions) && options.mentions.length) {
+        form.append('mentions', JSON.stringify(options.mentions));
+      }
+      if (options.captionMode === 'free' && options.captionStyle) {
+        form.append('captionStyle', JSON.stringify(options.captionStyle));
+      }
       form.append('status', status);
       if (status === 'scheduled' && options.publishAt) {
         form.append('publishAt', options.publishAt);
@@ -561,6 +590,7 @@ const StoriesRail = forwardRef(function StoriesRail({ currentUser, users = [], o
 
       setUploadPhase('upload');
       await client.post('/stories', form, { timeout: 5 * 60 * 1000 });
+      await removeOfflineMedia(currentUser.id, clientStoryId);
       if (status === 'published') await loadStories();
       await loadDraftsCount();
       return true;
@@ -573,6 +603,37 @@ const StoriesRail = forwardRef(function StoriesRail({ currentUser, users = [], o
       setUploadPhase('');
     }
   }
+  const offlineRetryRef = useRef({ inFlight: false, failCounts: new Map() });
+
+  useEffect(() => {
+    async function retryStories() {
+      if (!navigator.onLine || !currentUser?.id) return;
+      // Never let two retry passes overlap — that's what turns one stuck
+      // item into a growing pile of concurrent duplicate requests.
+      if (offlineRetryRef.current.inFlight) return;
+      offlineRetryRef.current.inFlight = true;
+      try {
+        const pending = (await getOfflineMedia(currentUser.id)).filter((entry) => entry.type === 'story');
+        for (const entry of pending) {
+          const fails = offlineRetryRef.current.failCounts.get(entry.id) || 0;
+          if (fails >= 3) continue; // stop hammering a permanently broken item
+          const file = new File([entry.sourceBytes], entry.filename || 'story.enc', { type: entry.mimetype || 'application/octet-stream' });
+          const ok = await uploadStory(file, entry.storyOptions?.ttlMs, entry.storyOptions?.allowReplies, entry.storyOptions?.options || {});
+          if (!ok) {
+            offlineRetryRef.current.failCounts.set(entry.id, fails + 1);
+          } else {
+            offlineRetryRef.current.failCounts.delete(entry.id);
+          }
+        }
+      } finally {
+        offlineRetryRef.current.inFlight = false;
+      }
+    }
+    const retry = () => retryStories().catch(() => {});
+    window.addEventListener('online', retry);
+    retry();
+    return () => window.removeEventListener('online', retry);
+  }, [currentUser?.id]);
 
   function closeComposer() {
     if (pendingPreviewUrl) URL.revokeObjectURL(pendingPreviewUrl);
@@ -783,6 +844,7 @@ const StoriesRail = forwardRef(function StoriesRail({ currentUser, users = [], o
         <StoryComposer
          file={pendingQueue[pendingIndex]}
           previewUrl={pendingPreviewUrl}
+          friends={storyFriends}
           onCancel={closeComposer}
           onConfirm={confirmPostStory}
           uploading={uploading}
@@ -795,6 +857,7 @@ const StoriesRail = forwardRef(function StoriesRail({ currentUser, users = [], o
       )}
             {textComposerOpen && !pendingQueue.length && (
         <TextStoryComposer
+        friends={storyFriends}
           onCancel={() => setTextComposerOpen(false)}
           onConfirm={confirmPostTextStory}
           uploading={uploading}
@@ -1034,6 +1097,7 @@ function StoryViewer({ group, startIndex, currentUserId, users = [], onClose, on
   const [blockedReason, setBlockedReason] = useState('');
   const [loadPhase, setLoadPhase] = useState(''); // '', 'download', 'decrypt'
   const [downloadPct, setDownloadPct] = useState(null);
+  const [slowLoad, setSlowLoad] = useState(false);
   const [replyText, setReplyText] = useState('');
   const [sendingReply, setSendingReply] = useState(false);
   const [replySentFlash, setReplySentFlash] = useState('');
@@ -1075,13 +1139,24 @@ function StoryViewer({ group, startIndex, currentUserId, users = [], onClose, on
     const abortController = new AbortController();
     let objectUrl;
     let usedCache = false;
+    let settled = false;
 
     setMediaUrl(null);
     setMediaBlob(null);
     setBlockedReason('');
     setLoadPhase('');
     setDownloadPct(null);
+    setSlowLoad(false);
     setSaveHighlightOpen(false);
+
+    const slowTimer = setTimeout(() => setSlowLoad(true), 5000);
+    // Hard fail-safe: never leave the viewer on an infinite spinner.
+    const failSafeTimer = setTimeout(() => {
+      if (settled || abortController.signal.aborted) return;
+      settled = true;
+      setLoadPhase('');
+      setBlockedReason('Story media is taking too long — close and open again');
+    }, 50_000);
 
     // The view-once "consumed" flag is written by this /view ping. It must fire
     // AFTER the media has actually loaded — never before or concurrently — or a
@@ -1099,17 +1174,24 @@ function StoryViewer({ group, startIndex, currentUserId, users = [], onClose, on
       const cachedBlob = storyMediaBlobCache.get(cacheKey);
       if (cachedUrl && cachedBlob) {
         usedCache = true;
+        settled = true;
         setMediaUrl(cachedUrl);
         setMediaBlob(cachedBlob);
         pingViewed();
         return;
       }
 
+      let unlocked;
       if (story.sealed) {
-        const unlocked = unlockStoryKey(story, currentUserId);
+        unlocked = unlockStoryKey(story, currentUserId);
         const ivB64 = unlocked?.payload?.ivB64 || story.contentIv;
         if (!unlocked?.ok || !unlocked?.payload?.keyB64 || !ivB64) {
-          setBlockedReason('Sealed story — no envelope for your keys');
+          settled = true;
+          const reason =
+            unlocked?.reason === 'no-secret'
+              ? 'Sealed story — your local keys do not match (re-import keys.txt)'
+              : 'Sealed story — no envelope for your keys';
+          setBlockedReason(reason);
           return;
         }
       }
@@ -1117,6 +1199,7 @@ function StoryViewer({ group, startIndex, currentUserId, users = [], onClose, on
       setLoadPhase('download');
       const blob = await resolveStoryMediaBlob(story, currentUserId, {
         signal: abortController.signal,
+        precomputedUnlock: unlocked,
         onDownloadProgress: (evt) => {
           if (!evt.total) return;
           setDownloadPct(Math.min(99, Math.round((evt.loaded / evt.total) * 100)));
@@ -1133,13 +1216,17 @@ function StoryViewer({ group, startIndex, currentUserId, users = [], onClose, on
 
       objectUrl = storyMediaCache.get(cacheKey) || URL.createObjectURL(blob);
       if (!storyMediaCache.has(cacheKey)) storyMediaCache.set(cacheKey, objectUrl);
+      settled = true;
       setMediaUrl(objectUrl);
       setMediaBlob(blob);
       setLoadPhase('');
       pingViewed();
     })().catch((err) => {
-      if (err.name === 'CanceledError' || err.name === 'AbortError') return;
+      // Only ignore abort if *this* viewer instance was cleaned up.
+      if (abortController.signal.aborted) return;
+      if (err?.name === 'CanceledError' || err?.name === 'AbortError') return;
 
+      settled = true;
       setMediaUrl(null);
       setMediaBlob(null);
       setLoadPhase('');
@@ -1149,24 +1236,37 @@ function StoryViewer({ group, startIndex, currentUserId, users = [], onClose, on
         if (status === 403) {
           setBlockedReason('Sealed story — no envelope for your keys');
         } else if (status === 404) {
-          setBlockedReason('Story media is missing on the server');
-        } else if (err.code === 'ECONNABORTED') {
+          setBlockedReason(
+            isOwn
+              ? 'This story’s file is missing from storage — delete it and post again'
+              : 'Story media is missing on the server (ask them to re-post)',
+          );
+        } else if (status === 502) {
+          setBlockedReason('Could not reach story storage — try again in a moment');
+        } else if (err.code === 'ECONNABORTED' || /timeout/i.test(String(err.message || ''))) {
           setBlockedReason('Status download timed out — try again');
         } else if (err.message?.includes('No decryption key')) {
           setBlockedReason('Sealed story — no envelope for your keys');
+        } else if (/OperationError|decrypt/i.test(String(err.message || err.name || ''))) {
+          setBlockedReason('Could not decrypt this sealed story');
         } else {
           setBlockedReason('Could not decrypt this sealed story');
         }
       } else {
         setBlockedReason(
-          err.code === 'ECONNABORTED'
-            ? 'Status download timed out — try again'
-            : 'Failed to load story media'
+          err?.response?.status === 404
+            ? isOwn
+              ? 'This story’s file is missing from storage — delete it and post again'
+              : 'Story media is missing on the server'
+            : err.code === 'ECONNABORTED' || /timeout/i.test(String(err.message || ''))
+              ? 'Status download timed out — try again'
+              : 'Failed to load story media'
         );
       }
     });
-
     return () => {
+      clearTimeout(slowTimer);
+      clearTimeout(failSafeTimer);
       abortController.abort();
       if (objectUrl && !usedCache) {
         const key = cacheKeyForStory(story);
@@ -1175,13 +1275,19 @@ function StoryViewer({ group, startIndex, currentUserId, users = [], onClose, on
     };
   }, [story.id, story.sealed, story.contentIv, story.mimetype, currentUserId]);
 
-  // Prefetch next 1–2 stories so advancing feels instant.
+  // Prefetch next 1–2 stories so advancing feels instant — but only AFTER the
+  // current story's own media has actually started loading, so it never
+  // competes with the story the person is looking at right now.
   useEffect(() => {
+    if (!mediaUrl && !blockedReason) return undefined; // current story still loading — wait
+
     const controllers = [];
     const toPrefetch = [group.items[index + 1], group.items[index + 2]].filter(Boolean);
+    let cancelled = false;
 
     (async () => {
       for (const nextStory of toPrefetch) {
+        if (cancelled) return;
         if (!viewerCanSeeStory(nextStory, currentUserId)) continue;
         const nextCacheKey = cacheKeyForStory(nextStory);
         if (storyMediaBlobCache.has(nextCacheKey)) continue;
@@ -1198,10 +1304,10 @@ function StoryViewer({ group, startIndex, currentUserId, users = [], onClose, on
     })();
 
     return () => {
+      cancelled = true;
       for (const c of controllers) c.abort();
     };
-  }, [index, group.items, currentUserId]);
-
+  }, [index, group.items, currentUserId, mediaUrl, blockedReason]);
   useEffect(() => {
     if (!isOwn) return;
     const socket = getSocket();
@@ -1839,9 +1945,11 @@ function StoryViewer({ group, startIndex, currentUserId, users = [], onClose, on
               <p className="empty-hint">
                 {loadPhase === 'decrypt'
                   ? 'Decrypting…'
-                  : downloadPct != null
+                  : downloadPct != null && downloadPct > 0
                     ? `Downloading… ${downloadPct}%`
-                    : 'Loading status…'}
+                    : slowLoad
+                      ? 'Still loading — this one is taking longer than usual'
+                      : 'Loading status…'}
               </p>
             </div>
           )}
@@ -1850,7 +1958,24 @@ function StoryViewer({ group, startIndex, currentUserId, users = [], onClose, on
           {mediaUrl && story.mediaType === 'audio' && <audio src={mediaUrl} autoPlay controls />}
           {burst && <span className="story-reaction-burst">{burst}</span>}
         </div>
-        {story.caption && <p className="story-caption">{story.caption}</p>}
+        {story.caption && story.captionMode === 'free' && story.captionStyle && (
+          <StoryCaptionOverlay caption={story.caption} style={story.captionStyle} editable={false} />
+        )}
+        {story.caption && story.captionMode !== 'free' && (
+          <p className="story-caption">{story.caption}</p>
+        )}
+        {Array.isArray(story.mentions) && story.mentions.length > 0 && (
+          <p className="story-mentions-line">
+            with{' '}
+            {story.mentions.map((m, i) => (
+              <span key={m.user.id} className="mention-chip">
+                {m.visibility === 'hidden' ? '🔒 ' : ''}
+                @{m.user.username}
+                {i < story.mentions.length - 1 ? ', ' : ''}
+              </span>
+            ))}
+          </p>
+        )}
         <div className="story-viewer-actions">
             {isOwn && (
               <div className="story-viewer-actions-left">
@@ -2180,6 +2305,7 @@ function StoryViewer({ group, startIndex, currentUserId, users = [], onClose, on
 function StoryComposer({
   file,
   previewUrl,
+  friends = [],
   onCancel,
   onConfirm,
   uploading,
@@ -2270,16 +2396,25 @@ function StoryComposer({
           </button>
         </div>
 
-        <div className="story-composer-preview">
+        <div className="story-composer-preview" style={{ position: 'relative' }}>
           {file.type.startsWith('image/') && <img ref={imagePreviewRef} alt="" />}
           {isVideoFile && <video ref={videoPreviewRef} controls playsInline />}
           {file.type.startsWith('audio/') && <audio ref={audioPreviewRef} controls />}
+          {opts.captionMode === 'free' && (
+            <StoryCaptionOverlay
+              caption={opts.caption}
+              onCaptionChange={opts.setCaption}
+              style={opts.captionStyle}
+              onStyleChange={opts.setCaptionStyle}
+            />
+          )}
         </div>
 
         {displayError ? <p className="story-composer-error" role="alert">{displayError}</p> : null}
 
         <StoryPublishControls
           opts={opts}
+          friends={friends}
           busy={uploading}
           canSubmit={!uploading}
           busyLabel={busyPostLabel}

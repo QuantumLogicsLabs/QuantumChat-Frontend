@@ -100,6 +100,17 @@ function ReadReceipt({ status }) {
     );
   }
 
+  if (status === 'waiting') {
+    return (
+      <span className="read-receipt sending" title="Waiting for connection">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+          <circle cx="12" cy="12" r="9" opacity="0.35" />
+          <path d="M12 7v5l3 2" />
+        </svg>
+      </span>
+    );
+  }
+
   if (status === 'sent') {
     return (
       <span className="read-receipt sent" title="Sent">
@@ -130,6 +141,7 @@ function MessageBubble({
   senderLabel,
   replyPreview,
   starred,
+  important = false,
   pinned,
   showReadReceipts = true,
   groupRecipientCount,
@@ -152,6 +164,7 @@ function MessageBubble({
   onBurnViewOnce,
   onShowInfo,
   onShowEditHistory,
+  onImportant,
 }) {
   const { t } = useTranslation();
   const [menuOpen, setMenuOpen] = useState(false);
@@ -440,6 +453,12 @@ function MessageBubble({
                 <span>{starred ? t('chat.unstar', 'Unstar') : t('chat.star', 'Star')}</span>
               </button>
             )}
+            {onImportant && (
+              <button type="button" role="menuitem" onClick={() => { closeAll(); onImportant(messageId); }}>
+                <span className="message-menu-icon" aria-hidden="true"><Pin size={16} strokeWidth={2} /></span>
+                <span>{important ? 'Remove from important' : 'Save as important'}</span>
+              </button>
+            )}
             {onPin && (
               <button type="button" role="menuitem" onClick={() => { closeAll(); onPin(messageId); }}>
                 <span className="message-menu-icon" aria-hidden="true"><Pin size={16} strokeWidth={2} /></span>
@@ -560,12 +579,17 @@ function MessageBubble({
                 QuantumAI <span className="verified-ai-badge">AI</span>
               </div>
             )}
-            {(pinned || starred) && (
+            {(pinned || starred || important) && (
               <div className="message-flags">
                 {pinned && <span title="Pinned"><Pin size={12} /></span>}
                 {starred && (
                   <span title="Starred">
                     <Star size={12} fill="#FFC107" stroke="#FFC107" strokeWidth={0} />
+                  </span>
+                )}
+                {important && (
+                  <span title="Important">
+                    <Pin size={12} strokeWidth={2.2} />
                   </span>
                 )}
               </div>

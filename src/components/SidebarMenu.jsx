@@ -91,7 +91,7 @@ export default function SidebarMenu({
             >
               <span className="sidebar-menu-item-left">
                 <Star size={16} aria-hidden="true" />
-                <span>{t('nav.starredMessages', 'Starred messages')}</span>
+                <span>{t('nav.starredMessages', 'Important messages')}</span>
               </span>
             </button>
 

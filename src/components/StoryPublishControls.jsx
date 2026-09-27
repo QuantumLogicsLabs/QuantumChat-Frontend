@@ -1,5 +1,6 @@
-import { createPortal } from 'react-dom';
 import { useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
+import StoryMentionPicker from './StoryMentionPicker.jsx';
 
 const TTL_PRESETS = [
   { label: '1 hour', ms: 60 * 60 * 1000 },
@@ -27,6 +28,12 @@ export function useStoryPublishOptions(initialTtl = DEFAULT_TTL_MS) {
   const [viewOnce, setViewOnce] = useState(false);
   const [scheduleMode, setScheduleMode] = useState(false);
   const [scheduleLocal, setScheduleLocal] = useState(defaultScheduleLocalValue);
+  const [caption, setCaption] = useState('');
+  const [captionMode, setCaptionMode] = useState('fixed'); // 'fixed' (WhatsApp) | 'free' (Instagram)
+  const [captionStyle, setCaptionStyle] = useState({
+    x: 50, y: 85, fontSize: 22, color: '#ffffff', background: 'rgba(0,0,0,0.35)', align: 'center',
+  });
+  const [mentions, setMentions] = useState([]); // [{ id, username, visibility: 'public'|'hidden' }]
 
   function computeTtlMs() {
     if (customMode) {
@@ -41,9 +48,14 @@ export function useStoryPublishOptions(initialTtl = DEFAULT_TTL_MS) {
     }
     return preset;
   }
-
   function buildOptions(status) {
     const opts = { status: status || 'published', viewOnce };
+    opts.caption = caption.trim().slice(0, 200);
+    opts.captionMode = captionMode;
+    if (captionMode === 'free') opts.captionStyle = captionStyle;
+     if (mentions.length) {
+      opts.mentions = mentions.map((m) => ({ user: m.id, visibility: m.visibility }));
+    }
     if (opts.status === 'scheduled') {
       const at = new Date(scheduleLocal);
       if (Number.isNaN(at.getTime()) || at.getTime() <= Date.now() + 30_000) {
@@ -71,6 +83,14 @@ export function useStoryPublishOptions(initialTtl = DEFAULT_TTL_MS) {
     setScheduleMode,
     scheduleLocal,
     setScheduleLocal,
+    caption,
+    setCaption,
+    captionMode,
+    setCaptionMode,
+    captionStyle,
+    setCaptionStyle,
+    mentions,
+    setMentions,
     computeTtlMs,
     buildOptions,
     TTL_PRESETS,
@@ -113,6 +133,8 @@ export function StoryLocalPreview({ file, previewUrl, onClose }) {
 
 export function StoryPublishControls({
   opts,
+  friends = [],
+  mentionCandidates = [],
   busy,
   canSubmit,
   onPreview,
@@ -124,6 +146,49 @@ export function StoryPublishControls({
 }) {
   return (
     <>
+      <div className="story-caption-mode-toggle" role="tablist" aria-label="Caption style">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={opts.captionMode === 'fixed'}
+          className={opts.captionMode === 'fixed' ? 'active' : ''}
+          disabled={busy}
+          onClick={() => opts.setCaptionMode('fixed')}
+        >
+          Fixed caption
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={opts.captionMode === 'free'}
+          className={opts.captionMode === 'free' ? 'active' : ''}
+          disabled={busy}
+          onClick={() => opts.setCaptionMode('free')}
+        >
+          Free placement
+        </button>
+      </div>
+
+      {opts.captionMode === 'fixed' ? (
+        <div className="story-composer-caption">
+          <textarea
+            className="story-caption-input"
+            value={opts.caption}
+            disabled={busy}
+            maxLength={200}
+            rows={3}
+            placeholder="Add a caption…"
+            onChange={(e) => opts.setCaption(e.target.value)}
+            aria-label="Story caption"
+          />
+          <span className="story-caption-counter">{opts.caption.length}/200</span>
+        </div>
+      ) : (
+        <p className="story-caption-free-hint">
+          Drag the caption directly on the photo above to place it anywhere.
+        </p>
+      )}
+
       <div className="story-composer-ttl">
         <p className="story-composer-ttl-label">Visible for</p>
         <div className="story-composer-ttl-presets" role="group" aria-label="Story duration">
@@ -195,6 +260,15 @@ export function StoryPublishControls({
           />
           <span>View once — disappears for each viewer right after they open it</span>
         </label>
+       
+      {friends.length > 0 && (
+        <StoryMentionPicker
+          friends={friends}
+          selected={opts.mentions}
+          onChange={opts.setMentions}
+          disabled={busy}
+        />
+      )}
         <div className="story-schedule-block">
           <label className="story-composer-check">
             <input

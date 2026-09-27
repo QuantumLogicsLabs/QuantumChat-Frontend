@@ -41,6 +41,24 @@ function writeSet(userId, suffix, set) {
   localStorage.setItem(key(userId, suffix), JSON.stringify([...set]));
 }
 
+export function getAutoImportantRemovedIds(userId) {
+  return [...readSet(userId, 'auto-important-removed')];
+}
+
+export function rememberAutoImportantRemoval(userId, messageId) {
+  const set = readSet(userId, 'auto-important-removed');
+  set.add(String(messageId));
+  writeSet(userId, 'auto-important-removed', set);
+  return [...set];
+}
+
+export function clearAutoImportantRemoval(userId, messageId) {
+  const set = readSet(userId, 'auto-important-removed');
+  set.delete(String(messageId));
+  writeSet(userId, 'auto-important-removed', set);
+  return [...set];
+}
+
 export function getDeletedForMeIds(userId) {
   return [...readSet(userId, 'deleted-for-me')];
 }
