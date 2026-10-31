@@ -4,9 +4,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import client from '../api/client.js';
+import { useChatLock } from '../context/ChatLockContext.jsx';
 import { useVault } from '../context/VaultContext.jsx';
-import UserAvatar from './UserAvatar.jsx';
 import { getDisplayName } from '../utils/getDisplayName.js';
+import UserAvatar from './UserAvatar.jsx';
 
 function formatShortRelative(iso) {
   if (!iso) return '';
@@ -101,6 +102,7 @@ export default function ConversationList({
   onMute,
   onArchive,
   onPin,
+  onToggleChatLock,
   onToggleVault,
   chatFolders = [],
   onCreateFolder,
@@ -130,6 +132,7 @@ export default function ConversationList({
 }) {
   const { t, i18n } = useTranslation();
   const { isUnlocked: vaultUnlocked, isPeerVaulted } = useVault();
+  const { isChatLocked } = useChatLock();
   const [discoverItems, setDiscoverItems] = useState([]);
   const [discoverLoading, setDiscoverLoading] = useState(false);
   const [discoverError, setDiscoverError] = useState('');
@@ -449,15 +452,21 @@ export default function ConversationList({
           <span className="conv-row-time">{formatShortRelative(c.lastMessageAt)}</span>
         </span>
         <span className="user-list-sub-row">
-          <span className="user-list-lastseen">{c.subtitle || (c.isSelfChat ? 'Notes to self' : '')}</span>
-          {(c.unreadCount > 0 || c.unread) && (
-            <span className="unread-badge" aria-hidden="true">
-              {(c.unreadCount || 1) > 99 ? '99+' : c.unreadCount || 1}
-            </span>
-          )}
+          {isChatLocked(c.key) ? (
+        <span className="user-list-lastseen" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+          <Lock size={12} aria-hidden="true" /> Locked chat
+        </span>
+      ) : (
+        <span className="user-list-lastseen">{c.subtitle || (c.isSelfChat ? 'Notes to self' : '')}</span>
+      )}
+      {(c.unreadCount > 0 || c.unread) && (
+        <span className="unread-badge" aria-hidden="true">
+          {isChatLocked(c.key) ? '' : (c.unreadCount || 1) > 99 ? '99+' : c.unreadCount || 1}
+        </span>
+      )}
         </span>
       </span>
-{!c.isSelfChat && c.type === 'dm' && !c.peer?.isSystemUser && !vaultUnlocked && isPeerVaulted(c.id) && (
+      {!c.isSelfChat && c.type === 'dm' && !c.peer?.isSystemUser && !vaultUnlocked && isPeerVaulted(c.id) && (
       // Decoy view: shows regardless of which filter/tab rendered this row,
       // not just the "all" list's Other-users section. No real
       // friend-request call while locked.
@@ -652,6 +661,11 @@ export default function ConversationList({
                           <Lock size={14} /> Add to vault
                         </>
                       )}
+                    </button>
+                  )}
+                  {onToggleChatLock && !c.isSelfChat && (
+                    <button type="button" role="menuitem" onClick={() => runMenuAction(() => onToggleChatLock(c))}>
+                      {isChatLocked(c.key) ? (<><Unlock size={14} /> Remove chat lock</>) : (<><Lock size={14} /> Lock chat</>)}
                     </button>
                   )}
                   {c.type === 'dm' && onBlock && !c.isSelfChat && (

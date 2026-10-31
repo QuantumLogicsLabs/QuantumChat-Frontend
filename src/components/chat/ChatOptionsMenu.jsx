@@ -1,6 +1,3 @@
-import { useEffect, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
-import { useTranslation } from 'react-i18next';
 import {
   Ban,
   Eraser,
@@ -16,6 +13,9 @@ import {
   Unlock,
   VolumeX,
 } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
+import { useTranslation } from 'react-i18next';
 
 const MENU_WIDTH = 220;
 const MENU_EST_HEIGHT = 320;
@@ -48,6 +48,8 @@ export default function ChatOptionsMenu({
   isBlocked,
   isMuted,
   isVaulted,
+  isChatLocked,
+  onToggleChatLock,
   onToggleBlock,
   onToggleMute,
   onToggleVault,
@@ -168,6 +170,12 @@ export default function ChatOptionsMenu({
             {onClearChat && (
               <button type="button" role="menuitem" className="danger" onClick={() => run(onClearChat)}>
                 <Eraser size={15} /> {t('chat.clearChat', 'Clear chat')}
+              </button>
+            )}
+            {onToggleChatLock && (
+              <button type="button" role="menuitem" onClick={() => run(onToggleChatLock)}>
+                {isChatLocked ? <Unlock size={15} /> : <Lock size={15} />}{' '}
+                {isChatLocked ? t('chat.unlockChat', 'Remove chat lock') : t('chat.lockChat', 'Lock chat')}
               </button>
             )}
             {!isGroup && onToggleBlock && (
