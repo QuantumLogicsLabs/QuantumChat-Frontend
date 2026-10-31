@@ -28,6 +28,7 @@ import client, {
   muteChat,
   unmuteChat,
 } from "../api/client.js";
+import { listLive } from "../api/live.js";
 import { getUnreadCount as fetchUnreadNotificationCount } from "../api/notifications.js";
 import { postPresenceHeartbeat } from "../api/presence.js";
 import { connectSocket, getSocket } from "../api/socket.js";
@@ -42,6 +43,8 @@ import InfoPanel from "../components/chat/InfoPanel.jsx";
 import MediaSendPreview from "../components/chat/MediaSendPreview.jsx";
 import MessageActionSheet from "../components/chat/MessageActionSheet.jsx";
 import SwipeableMessage from "../components/chat/SwipeableMessage.jsx";
+import ChatLockPinModal from "../components/ChatLockPinModal.jsx";
+import ChatLockSetupModal from "../components/ChatLockSetupModal.jsx";
 import ClearChatModal from "../components/ClearChatModal.jsx";
 import ConfirmDialog from "../components/ConfirmDialog.jsx";
 import DateSeparator from "../components/DateSeparator.jsx";
@@ -55,7 +58,9 @@ import BottomSheet from "../components/ui/BottomSheet.jsx";
 import UserAvatar from "../components/UserAvatar.jsx";
 import VaultSetupModal from "../components/VaultSetupModal.jsx";
 import VaultUnlockModal from "../components/VaultUnlockModal.jsx";
+import VoiceNoteBar from "../components/VoiceNoteBar.jsx";
 import { useAuth } from "../context/AuthContext.jsx";
+import { useChatLock } from "../context/ChatLockContext.jsx";
 import { useNotificationSettings } from "../context/NotificationSettingsContext.jsx";
 import { useVault } from "../context/VaultContext.jsx";
 import { sealBytesAsync, secretboxSealAsync } from "../crypto/encryptFileAsync.js";
@@ -78,9 +83,15 @@ import {
   attachmentIdOf,
   normalizeAttachment,
 } from "../crypto/voiceCache.js";
+import useChatCalls from "../hooks/useChatCalls.js";
+import useChatFoldersAndPreferences from "../hooks/useChatFoldersAndPreferences.js";
+import useChatModerationAndClear from "../hooks/useChatModerationAndClear.js";
+import useChatSocketEvents from "../hooks/useChatSocketEvents.js";
+import useFriendships from "../hooks/useFriendships.js";
 import useLiveStream from "../hooks/useLiveStream.js";
-import { listLive } from "../api/live.js";
+import usePinnedAndStarredMessages from "../hooks/usePinnedAndStarredMessages.js";
 import { useScreenshotProtection } from "../hooks/useScreenshotProtection.js";
+import useVoiceRecorder from "../hooks/useVoiceRecorder.js";
 import { getWallpaperBackground, getWallpaperFx, preloadWallpaper } from '../theme/wallpaperBackgrounds.js';
 import activityStore from "../utils/activityStore.js";
 import {
@@ -110,15 +121,6 @@ import {
   isGroupAdmin,
   preferConfirmedThreadText,
 } from "../utils/groupPayload.js";
-import { setVoiceThreadOrder } from "../utils/voicePlaybackQueue.js";
-import useVoiceRecorder from "../hooks/useVoiceRecorder.js";
-import useChatSocketEvents from "../hooks/useChatSocketEvents.js";
-import useFriendships from "../hooks/useFriendships.js";
-import useChatCalls from "../hooks/useChatCalls.js";
-import usePinnedAndStarredMessages from "../hooks/usePinnedAndStarredMessages.js";
-import useChatFoldersAndPreferences from "../hooks/useChatFoldersAndPreferences.js";
-import useChatModerationAndClear from "../hooks/useChatModerationAndClear.js";
-import VoiceNoteBar from "../components/VoiceNoteBar.jsx";
 import {
   getHiddenChatIds,
   hideChat,
@@ -158,6 +160,7 @@ import {
 } from "../utils/readState.js";
 import { shouldEnforceScreenshotProtection } from "../utils/screenshotProtection.js";
 import { playReceiveSound, playSendSound, unlockAudio } from "../utils/sounds.js";
+import { setVoiceThreadOrder } from "../utils/voicePlaybackQueue.js";
 
 const AIAssistantPanel = lazy(() => import("../components/AIAssistantPanel.jsx"));
 const CameraCapture = lazy(() => import("../components/CameraCapture.jsx"));
@@ -267,6 +270,10 @@ export default function Chat() {
   } = useAuth();
   const { showToast } = useToast();
   const { isUnlocked: vaultUnlocked, isPeerVaulted, vaultEnabled, addPeer: addVaultPeer, removePeer: removeVaultPeer, lock: lockVault } = useVault();
+  const { enabled: chatLockEnabled, isUnlocked: chatLockUnlocked, isChatLocked, unlock: unlockChatLock, lockChat, unlockChat, ready: chatLockReady } = useChatLock();
+  const [showChatLockSetup, setShowChatLockSetup] = useState(false);
+  const [pendingLockKey, setPendingLockKey] = useState(null);
+  const [removeLockKey, setRemoveLockKey] = useState(null);
   const [showVaultSetup, setShowVaultSetup] = useState(false);
   const [showVaultUnlock, setShowVaultUnlock] = useState(false);
   const [pendingVaultPeerId, setPendingVaultPeerId] = useState(null);
@@ -1660,6 +1667,10 @@ useEffect(() => {
   const selectedKey = selected?.key;
   const selectedType = selected?.type;
   const selectedId = selected?.id;
+  const threadBlockedByLock =
+        Boolean(selectedKey) &&
+        !chatLockUnlocked &&
+        (!chatLockReady || isChatLocked(selectedKey));
   const decorateRef = useRef(decorate);
   decorateRef.current = decorate;
   const recordActivityRef = useRef(recordActivityFromMessage);
@@ -1673,7 +1684,14 @@ useEffect(() => {
   const loadedThreadKeyRef = useRef(null);
 
   useEffect(() => {
-    if (!selectedKey || !selectedId || !hasLocalKeyring) return undefined;
+    if (threadBlockedByLock) {
+      loadedThreadKeyRef.current = null;
+      setMessages([]);
+    }
+  }, [threadBlockedByLock]);
+
+  useEffect(() => {
+    if (!selectedKey || !selectedId || !hasLocalKeyring || threadBlockedByLock) return undefined;
 
     const threadKey = selectedKey;
     const threadType = selectedType;
@@ -1756,7 +1774,7 @@ useEffect(() => {
     // thread. The request already carries the correct x-vault-token via
     // client.js's interceptor, so the server swaps between the decoy and
     // real message set automatically — this just re-triggers that fetch.
-  }, [selectedKey, selectedType, selectedId, hasLocalKeyring, user.id, vaultUnlocked]);
+  }, [selectedKey, selectedType, selectedId, hasLocalKeyring, user.id, vaultUnlocked, threadBlockedByLock]);
   // Vault: only fetch/show "has decoy messages" when actually unlocked and
   // viewing a vaulted DM — this call itself 403s if locked (server-enforced),
   // but skip it entirely rather than firing a doomed request every switch.
@@ -1789,7 +1807,7 @@ useEffect(() => {
   // when a socket is connected — view-once / receipt updates can be missed
   // if signaling is on a separate host from the message API.
   useEffect(() => {
-    if (!selectedKey || !selectedId || !hasLocalKeyring) return undefined;
+   if (!selectedKey || !selectedId || !hasLocalKeyring || threadBlockedByLock) return undefined;
 
     let cancelled = false;
     let inFlight = false;
@@ -1913,7 +1931,7 @@ useEffect(() => {
       window.removeEventListener("focus", syncOpenConversation);
       document.removeEventListener("visibilitychange", syncWhenVisible);
     };
-  }, [selectedKey, selectedType, selectedId, hasLocalKeyring, user.id]);
+  }, [selectedKey, selectedType, selectedId, hasLocalKeyring, user.id, threadBlockedByLock]);
   // Global inbox sync: covers every conversation, not just the one that's
   // open. syncOpenConversation above only refreshes the active thread, so
   // without this, other chats never update (no unread badge, no sidebar
@@ -2939,6 +2957,22 @@ useEffect(() => {
       }
     }
   }
+  async function applyChatLock(key) {
+        try {
+          await lockChat(key);
+          setPendingLockKey(null);
+          showToast("Chat locked", "success");
+          if (selected && String(selected.key) === String(key)) applyConversationSelection(null);
+        } catch (err) {
+          showToast(err.response?.data?.error || "Failed to lock chat", "error");
+        }
+      }
+      function handleToggleChatLock(c) {
+        if (!c?.key || c.isSelfChat) return;
+        if (isChatLocked(c.key)) { setRemoveLockKey(c.key); return; }
+        if (!chatLockEnabled) { setPendingLockKey(c.key); setShowChatLockSetup(true); return; }
+        applyChatLock(c.key);
+      }
   async function handleToggleVault(peerId) {
     if (isPeerVaulted(peerId)) {
       try {
@@ -5137,6 +5171,7 @@ useEffect(() => {
           showToast(c.pinned ? "Chat unpinned" : "Chat pinned", "info");
         }}
         onToggleVault={(c) => handleToggleVault(c.id)}
+        onToggleChatLock={handleToggleChatLock} 
         chatFolders={chatFolders}
         onCreateFolder={(c) =>
           setFolderEditor({ folder: null, initialKeys: c ? [String(c.key)] : [] })
@@ -5605,6 +5640,8 @@ useEffect(() => {
                       !selected.isSelfChat &&
                       isPeerVaulted(selected.id)
                     }
+                    isChatLocked={isChatLocked(selected.key)}
+                    onToggleChatLock={selected.isSelfChat ? undefined : () => handleToggleChatLock(selected)}
                     compactExtras={isCompactChrome}
                     onOpenAi={() => setAiPanelOpen((open) => !open)}
                     onOpenInfo={toggleInfoPanel}
@@ -6863,6 +6900,23 @@ useEffect(() => {
             setPendingVaultPeerId(null);
           }}
         />
+      )}
+      {selected && threadBlockedByLock && isChatLocked(selected.key) && (
+        <ChatLockPinModal opaque title="Chat locked" subtitle="Enter your PIN to open this chat"
+          confirmLabel="Unlock" closeLabel="Back"
+          onSubmit={async (pin) => { await unlockChatLock(pin); }}
+          onClose={() => applyConversationSelection(null)} />
+      )}
+      {showChatLockSetup && (
+        <ChatLockSetupModal
+          onClose={() => { setShowChatLockSetup(false); setPendingLockKey(null); }}
+          onDone={() => { setShowChatLockSetup(false); if (pendingLockKey) applyChatLock(pendingLockKey); }} />
+      )}
+      {removeLockKey && (
+        <ChatLockPinModal title="Remove chat lock" subtitle="Enter your PIN to stop locking this chat"
+          confirmLabel="Remove lock"
+          onSubmit={async (pin) => { await unlockChat(removeLockKey, pin); setRemoveLockKey(null); showToast("Chat lock removed", "success"); }}
+          onClose={() => setRemoveLockKey(null)} />
       )}
       {showVaultUnlock && (
         <VaultUnlockModal
