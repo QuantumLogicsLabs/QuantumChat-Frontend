@@ -1,6 +1,7 @@
 import axios from 'axios';
 import { getToken } from '../crypto/keyStorage.js';
 import { getApiUrl } from './baseUrl.js';
+import { getChatLockToken } from './chatLockToken.js';
 import { getVaultToken } from './vaultToken.js';
 
 const client = axios.create({
@@ -15,6 +16,10 @@ client.interceptors.request.use((config) => {
   const vaultToken = getVaultToken();
   if (vaultToken) {
     config.headers['x-vault-token'] = vaultToken;
+  }
+  const chatLockToken = getChatLockToken();
+  if (chatLockToken) {
+    config.headers['x-chat-lock-token'] = chatLockToken;
   }
   return config;
 });
