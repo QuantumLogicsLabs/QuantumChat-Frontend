@@ -36,6 +36,7 @@ import PrivacySelect from './ui/PrivacySelect.jsx';
 import UserAvatar, { bustAvatarCache } from './UserAvatar.jsx';
 import ToggleSwitch from './ToggleSwitch.jsx';
 import ThemePreviewCard from './ThemePreviewCard.jsx';
+import SavedRepliesSection from './SavedRepliesSection.jsx';
 import './SettingsModal.css';
 
 function parseMutedKey(key, myId) {
@@ -116,6 +117,10 @@ export default function SettingsModal({
   onUserUpdated,
   onLogout,
   onExportChat,
+  savedReplies = [],
+  savedRepliesLoading = false,
+  savedRepliesError = '',
+  onSavedRepliesChanged,
   initialTab = 'profile',
   className = '',
 }) {
@@ -195,6 +200,11 @@ export default function SettingsModal({
       ),
     },
     {
+      id: 'saved-replies',
+      label: 'Saved replies',
+      icon: <span aria-hidden="true">↯</span>,
+    },
+    {
       id: 'invite',
       label: t('settings.tabs.invite', 'Invite'),
       icon: (
@@ -215,6 +225,7 @@ export default function SettingsModal({
     security: t('settings.security.subtitle', 'Manage encryption keys, active sessions, and multi-factor authentication'),
     blocked: t('settings.blocked.subtitle', 'Review blocked contacts and moderation settings'),
     data: t('settings.data.subtitle', 'Export archives, manage storage usage, and account data'),
+    'saved-replies': 'Create private shortcuts for messages you send often',
     invite: t('settings.invite.subtitle', 'Invite friends to QuantumChat and track referrals'),
   };
 
@@ -3148,6 +3159,15 @@ export default function SettingsModal({
                 </button>
               </div>
             </section>
+          )}
+
+          {(tab === 'saved-replies' || searchQuery) && (
+            <SavedRepliesSection
+              replies={savedReplies}
+              loading={savedRepliesLoading}
+              loadError={savedRepliesError}
+              onChanged={onSavedRepliesChanged}
+            />
           )}
 
           {(tab === 'invite' || searchQuery) && (
