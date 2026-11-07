@@ -1,0 +1,89 @@
+.saved-replies-list {
+  display: grid;
+  gap: 8px;
+  margin: 16px 0 20px;
+}
+
+.saved-reply-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--qc-radius-sm, 8px);
+  background: var(--bg-elevated);
+}
+
+.saved-reply-copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.saved-reply-copy strong,
+.saved-reply-suggestion strong {
+  color: var(--accent);
+}
+
+.saved-reply-copy span {
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.saved-reply-actions,
+.saved-reply-form-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.saved-reply-form {
+  display: grid;
+  gap: 12px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.saved-reply-form h4 {
+  margin: 0;
+  color: var(--text-primary);
+}
+
+.saved-reply-suggestions {
+  position: absolute;
+  inset-inline: 52px 52px;
+  bottom: calc(100% + 8px);
+  z-index: 20;
+  display: grid;
+  gap: 2px;
+  padding: 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-lg);
+}
+
+.saved-reply-suggestion {
+  display: grid;
+  gap: 3px;
+  padding: 9px 11px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-secondary);
+  text-align: start;
+  cursor: pointer;
+}
+
+.saved-reply-suggestion:hover,
+.saved-reply-suggestion.active {
+  background: var(--accent-muted);
+  color: var(--text-primary);
+}
+
+.saved-reply-suggestion span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
