@@ -28,6 +28,7 @@ import client, {
   muteChat,
   unmuteChat,
 } from "../api/client.js";
+import { listSavedReplies } from "../api/savedReplies.js";
 import { listLive } from "../api/live.js";
 import { getUnreadCount as fetchUnreadNotificationCount } from "../api/notifications.js";
 import { postPresenceHeartbeat } from "../api/presence.js";
@@ -289,6 +290,12 @@ export default function Chat() {
   const [selected, setSelected] = useState(null); // { type: 'dm'|'group', id, ... }
   const [messages, setMessages] = useState([]);
   const [draft, setDraft] = useState("");
+  const [savedReplies, setSavedReplies] = useState([]);
+  const [savedRepliesLoading, setSavedRepliesLoading] = useState(false);
+  const [savedRepliesError, setSavedRepliesError] = useState("");
+  const [savedReplyOpen, setSavedReplyOpen] = useState(false);
+  const [savedReplyQuery, setSavedReplyQuery] = useState("");
+  const [savedReplyIndex, setSavedReplyIndex] = useState(0);
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("all");
@@ -329,6 +336,36 @@ export default function Chat() {
   const [confirmDialog, setConfirmDialog] = useState(null);
   const [confirmBusy, setConfirmBusy] = useState(false);
   const [activityTick, setActivityTick] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!user?.id) {
+      setSavedReplies([]);
+      setSavedRepliesError("");
+      setSavedReplyOpen(false);
+      setSavedReplyQuery("");
+      return undefined;
+    }
+    setSavedReplyOpen(false);
+    setSavedReplyQuery("");
+    setSavedRepliesLoading(true);
+    listSavedReplies()
+      .then((replies) => {
+        if (!cancelled) {
+          setSavedReplies(replies);
+          setSavedRepliesError("");
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) setSavedRepliesError(err.response?.data?.error || "Could not load saved replies");
+      })
+      .finally(() => {
+        if (!cancelled) setSavedRepliesLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.id]);
 
   // Preload MeetingOverlay chunk on idle and when a chat that can start a call is opened
   useEffect(() => {
@@ -3063,6 +3100,16 @@ useEffect(() => {
     const value = e.target.value;
     setDraft(value);
 
+    const shortcutMatch = value.match(/(^|\s)(\/[^\s]*)$/);
+    if (shortcutMatch) {
+      setSavedReplyQuery(shortcutMatch[2].toLowerCase());
+      setSavedReplyOpen(savedReplies.length > 0);
+      setSavedReplyIndex(0);
+    } else {
+      setSavedReplyOpen(false);
+      setSavedReplyQuery("");
+    }
+
     if (selected?.type === "group") {
       const atMatch = value.match(/(^|\s)@([a-zA-Z0-9_.-]{0,32})$/);
       if (atMatch) {
@@ -3131,6 +3178,21 @@ useEffect(() => {
     textareaRef.current?.focus();
   }
 
+  function insertSavedReply(reply) {
+    setDraft((prev) => prev.replace(/(^|\s)\/[^\s]*$/, `$1${reply.message}`));
+    setSavedReplyOpen(false);
+    setSavedReplyQuery("");
+    setSavedReplyIndex(0);
+    setTimeout(() => {
+      const textarea = textareaRef.current;
+      if (textarea) {
+        textarea.focus();
+        textarea.selectionStart = textarea.value.length;
+        textarea.selectionEnd = textarea.value.length;
+      }
+    }, 0);
+  }
+
   function handleTextareaInput(e) {
     const el = e.target;
     el.style.height = "auto";
@@ -3138,6 +3200,27 @@ useEffect(() => {
   }
 
   function handleTextareaKeyDown(e) {
+    if (savedReplyOpen && savedReplySuggestions.length > 0) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setSavedReplyOpen(false);
+        return;
+      }
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault();
+        setSavedReplyIndex((current) => e.key === "ArrowDown"
+          ? (current + 1) % savedReplySuggestions.length
+          : (current - 1 + savedReplySuggestions.length) % savedReplySuggestions.length);
+        return;
+      }
+      if (e.key === "Enter" && !e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey) {
+        e.preventDefault();
+        insertSavedReply(savedReplySuggestions[savedReplyIndex]);
+        return;
+      }
+    } else if (e.key === "Escape") {
+      setSavedReplyOpen(false);
+    }
     if ((e.key === "Enter" || e.keyCode === 13) && !e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey) {
       if (e.nativeEvent?.isComposing) return;
       if (mentionOpen && mentionSuggestions.length > 0) {
@@ -4929,6 +5012,13 @@ useEffect(() => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mentionOpen, mentionQuery, activeGroup, user.id, iAmGroupAdmin]);
 
+  const savedReplySuggestions = useMemo(() => {
+    if (!savedReplyOpen) return [];
+    return savedReplies
+      .filter((reply) => reply.shortcut.toLowerCase().startsWith(savedReplyQuery))
+      .slice(0, 6);
+  }, [savedReplyOpen, savedReplies, savedReplyQuery]);
+
   async function submitPollDraft(e) {
     e?.preventDefault?.();
     if (!pollDraft || !selected || selected.type !== "group") return;
@@ -6218,6 +6308,24 @@ useEffect(() => {
                         disabled={voiceRecorder.sending}
                         rows={1}
                       />
+                      {savedReplyOpen && savedReplySuggestions.length > 0 && (
+                        <div className="saved-reply-suggestions" role="listbox" aria-label="Saved replies">
+                          {savedReplySuggestions.map((reply, index) => (
+                            <button
+                              key={reply.id}
+                              type="button"
+                              className={`saved-reply-suggestion ${index === savedReplyIndex ? "active" : ""}`}
+                              onMouseDown={(event) => event.preventDefault()}
+                              onClick={() => insertSavedReply(reply)}
+                              role="option"
+                              aria-selected={index === savedReplyIndex}
+                            >
+                              <strong>{reply.shortcut}</strong>
+                              <span>{reply.message}</span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
                       {draft.trim() ? (
                         <button
                           type="submit"
@@ -6855,6 +6963,10 @@ useEffect(() => {
                 a.click();
                 showToast("Chat exported from this device", "success");
               }}
+              savedReplies={savedReplies}
+              savedRepliesLoading={savedRepliesLoading}
+              savedRepliesError={savedRepliesError}
+              onSavedRepliesChanged={setSavedReplies}
             />
           </Suspense>
         </LazyChunkErrorBoundary>
