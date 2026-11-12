@@ -2,15 +2,16 @@
  * QuantumChat API base URL (no trailing slash, no `/api` suffix).
  * Production builds must never silently use localhost — CSP on Vercel blocks it.
  */
-const LEGACY_PROD_BACKEND = 'https://quantum-chat-backend.vercel.app';
-const PROD_BACKEND = 'https://quantum-chat-backend-six.vercel.app';
+const PROD_BACKEND = 'https://quantum-chat-backend.vercel.app';
+// The -six deployment is disabled by Vercel (402 DEPLOYMENT_DISABLED). The
+// frontend's Vercel dashboard env may still say -six, so remap it here too.
+const DISABLED_BACKENDS = new Set(['https://quantum-chat-backend-six.vercel.app']);
 
 function normalizeApiBaseUrl(url) {
   const trimmed = String(url || '')
     .trim()
     .replace(/\/$/, '');
-  // Vercel dashboard env can lag behind repo .env.production — remap the old org backend.
-  if (trimmed === LEGACY_PROD_BACKEND) return PROD_BACKEND;
+  if (DISABLED_BACKENDS.has(trimmed)) return PROD_BACKEND;
   return trimmed;
 }
 
