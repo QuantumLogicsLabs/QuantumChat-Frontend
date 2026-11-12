@@ -7,6 +7,11 @@ import {
   registerSignalHandlers,
   unsealCallEnvelope,
 } from '../utils/callSignalTransport.js';
+import {
+  currentTrackDeviceId,
+  getCallMedia,
+  listInputDevices,
+} from '../utils/callMedia.js';
 
 const ICE_RESTART_FAILSAFE_MS = 10_000;
 const RING_TIMEOUT_MS = 45_000;
@@ -34,6 +39,14 @@ export default function useMeetingCall({ userId, resolveGroupMembers, onEnd } = 
   const [localStream, setLocalStream] = useState(null);
   const [muted, setMuted] = useState(false);
   const [cameraOff, setCameraOff] = useState(false);
+  const [noiseCancel, setNoiseCancelState] = useState(true);
+  const [audioDeviceId, setAudioDeviceId] = useState('');
+  const [videoDeviceId, setVideoDeviceId] = useState('');
+  const [audioDevices, setAudioDevices] = useState([]);
+  const [videoDevices, setVideoDevices] = useState([]);
+  const noiseCancelRef = useRef(true);
+  const audioDeviceIdRef = useRef('');
+  const videoDeviceIdRef = useRef('');
 
   const meetingRef = useRef(null);
   const localStreamRef = useRef(null);
@@ -45,6 +58,39 @@ export default function useMeetingCall({ userId, resolveGroupMembers, onEnd } = 
   const onEndRef = useRef(onEnd);
   resolveGroupMembersRef.current = resolveGroupMembers;
   onEndRef.current = onEnd;
+
+  useEffect(() => {
+    noiseCancelRef.current = noiseCancel;
+  }, [noiseCancel]);
+  useEffect(() => {
+    audioDeviceIdRef.current = audioDeviceId;
+  }, [audioDeviceId]);
+  useEffect(() => {
+    videoDeviceIdRef.current = videoDeviceId;
+  }, [videoDeviceId]);
+
+  const refreshDevices = useCallback(async () => {
+    try {
+      const { audioInputs, videoInputs } = await listInputDevices();
+      setAudioDevices(audioInputs);
+      setVideoDevices(videoInputs);
+      return { audioInputs, videoInputs };
+    } catch {
+      return { audioInputs: [], videoInputs: [] };
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!meeting) return undefined;
+    refreshDevices();
+    const md = navigator.mediaDevices;
+    if (!md?.addEventListener) return undefined;
+    const onChange = () => {
+      refreshDevices();
+    };
+    md.addEventListener('devicechange', onChange);
+    return () => md.removeEventListener('devicechange', onChange);
+  }, [meeting, refreshDevices]);
 
   useEffect(() => {
     meetingRef.current = meeting;
@@ -232,14 +278,22 @@ export default function useMeetingCall({ userId, resolveGroupMembers, onEnd } = 
   );
 
   const attachLocalMedia = useCallback(async (video) => {
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+    const stream = await getCallMedia({
+      audio: true,
       video: Boolean(video),
+      audioDeviceId: audioDeviceIdRef.current || undefined,
+      videoDeviceId: videoDeviceIdRef.current || undefined,
+      noiseCancel: noiseCancelRef.current,
     });
     localStreamRef.current = stream;
     setLocalStream(stream);
+    const aId = currentTrackDeviceId(stream, 'audio');
+    const vId = currentTrackDeviceId(stream, 'video');
+    if (aId) setAudioDeviceId(aId);
+    if (vId) setVideoDeviceId(vId);
+    refreshDevices().catch(() => {});
     return stream;
-  }, []);
+  }, [refreshDevices]);
 
   const startMeeting = useCallback(
     async ({ groupId, video = false }) => {
@@ -357,8 +411,151 @@ export default function useMeetingCall({ userId, resolveGroupMembers, onEnd } = 
     setMuted(next);
   }, [muted]);
 
+  const replaceLocalTrackOnAll = useCallback(async (kind, newTrack) => {
+    const stream = localStreamRef.current;
+    if (!stream || !newTrack) return;
+
+    const oldTracks =
+      kind === 'audio' ? stream.getAudioTracks() : stream.getVideoTracks();
+    for (const old of oldTracks) {
+      if (old === newTrack) continue;
+      stream.removeTrack(old);
+      try {
+        old.stop();
+      } catch {
+        /* ignore */
+      }
+    }
+    if (!oldTracks.includes(newTrack)) {
+      stream.addTrack(newTrack);
+    }
+    setLocalStream(new MediaStream(stream.getTracks()));
+
+    for (const [peerId, pc] of pcMapRef.current.entries()) {
+      if (pc.signalingState === 'closed') continue;
+      const sender = pc.getSenders().find((s) => s.track?.kind === kind);
+      if (sender) {
+        await sender.replaceTrack(newTrack).catch(() => {});
+        continue;
+      }
+      if (kind !== 'video') continue;
+
+      let videoTransceiver = pc.getTransceivers().find(
+        (t) =>
+          t.receiver?.track?.kind === 'video' ||
+          t.sender?.track?.kind === 'video',
+      );
+      if (!videoTransceiver) {
+        videoTransceiver = pc.addTransceiver(newTrack, {
+          direction: 'sendrecv',
+          streams: [stream],
+        });
+      } else {
+        try {
+          videoTransceiver.direction = 'sendrecv';
+        } catch {
+          /* ignore */
+        }
+        await videoTransceiver.sender.replaceTrack(newTrack).catch(() => {});
+      }
+      try {
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        await sendTo('meeting:offer', peerId, {
+          type: 'offer',
+          callId: meetingRef.current?.meetingId,
+          sdp: offer,
+          video: true,
+        });
+      } catch {
+        /* ignore re-offer errors */
+      }
+    }
+  }, [sendTo]);
+
+  const switchAudioDevice = useCallback(
+    async (deviceId) => {
+      try {
+        const nextStream = await getCallMedia({
+          audio: true,
+          video: false,
+          audioDeviceId: deviceId || undefined,
+          noiseCancel: noiseCancelRef.current,
+        });
+        const track = nextStream.getAudioTracks()[0];
+        if (!track) return;
+        track.enabled = !muted;
+        await replaceLocalTrackOnAll('audio', track);
+        const resolved =
+          deviceId || currentTrackDeviceId(localStreamRef.current, 'audio');
+        if (resolved) setAudioDeviceId(resolved);
+        refreshDevices().catch(() => {});
+      } catch (err) {
+        console.warn('[useMeetingCall] Could not switch microphone:', err);
+        throw err;
+      }
+    },
+    [muted, refreshDevices, replaceLocalTrackOnAll],
+  );
+
+  const switchVideoDevice = useCallback(
+    async (deviceId) => {
+      try {
+        const nextStream = await getCallMedia({
+          audio: false,
+          video: true,
+          videoDeviceId: deviceId || undefined,
+        });
+        const track = nextStream.getVideoTracks()[0];
+        if (!track) return;
+
+        let stream = localStreamRef.current;
+        if (!stream) {
+          stream = new MediaStream([track]);
+          localStreamRef.current = stream;
+          setLocalStream(stream);
+          await replaceLocalTrackOnAll('video', track);
+        } else {
+          track.enabled = true;
+          await replaceLocalTrackOnAll('video', track);
+        }
+
+        const resolved =
+          deviceId || currentTrackDeviceId(localStreamRef.current, 'video');
+        if (resolved) setVideoDeviceId(resolved);
+        setCameraOff(false);
+        setMeeting((prev) => (prev ? { ...prev, video: true } : prev));
+        refreshDevices().catch(() => {});
+      } catch (err) {
+        console.warn('[useMeetingCall] Could not switch camera:', err);
+        throw err;
+      }
+    },
+    [refreshDevices, replaceLocalTrackOnAll],
+  );
+
+  const setNoiseCancel = useCallback(
+    async (enabled) => {
+      const next = Boolean(enabled);
+      setNoiseCancelState(next);
+      noiseCancelRef.current = next;
+      const stream = localStreamRef.current;
+      if (!stream?.getAudioTracks()?.length) return;
+      try {
+        await switchAudioDevice(
+          audioDeviceIdRef.current ||
+            currentTrackDeviceId(stream, 'audio') ||
+            '',
+        );
+      } catch {
+        /* keep preference */
+      }
+    },
+    [switchAudioDevice],
+  );
+
   const toggleCamera = useCallback(async () => {
-    let stream = localStreamRef.current;
+    const stream = localStreamRef.current;
     const turningOff = !cameraOff;
 
     if (turningOff) {
@@ -371,7 +568,6 @@ export default function useMeetingCall({ userId, resolveGroupMembers, onEnd } = 
       return;
     }
 
-    // Turning camera ON
     if (stream && stream.getVideoTracks().some((t) => t.readyState === 'live')) {
       stream.getVideoTracks().forEach((t) => {
         t.enabled = true;
@@ -380,49 +576,13 @@ export default function useMeetingCall({ userId, resolveGroupMembers, onEnd } = 
       return;
     }
 
-    // No live video track — acquire dynamically via getUserMedia
     try {
-      const vStream = await navigator.mediaDevices.getUserMedia({ video: true });
-      const vTrack = vStream.getVideoTracks()[0];
-      if (!vTrack) return;
-
-      if (!stream) {
-        stream = new MediaStream([vTrack]);
-        localStreamRef.current = stream;
-      } else {
-        stream.addTrack(vTrack);
-      }
-
-      setLocalStream(new MediaStream(stream.getTracks()));
-
-      for (const [peerId, pc] of pcMapRef.current.entries()) {
-        if (pc.signalingState === 'closed') continue;
-        const sender = pc.getSenders().find((s) => s.track?.kind === 'video');
-        if (sender) {
-          await sender.replaceTrack(vTrack).catch(() => {});
-        } else {
-          pc.addTrack(vTrack, stream);
-        }
-        try {
-          const offer = await pc.createOffer();
-          await pc.setLocalDescription(offer);
-          await sendTo('meeting:offer', peerId, {
-            type: 'offer',
-            callId: meetingRef.current?.meetingId,
-            sdp: offer,
-          });
-        } catch {
-          /* ignore re-offer errors */
-        }
-      }
-
-      setMeeting((prev) => (prev ? { ...prev, video: true } : prev));
-      setCameraOff(false);
+      await switchVideoDevice(videoDeviceIdRef.current || '');
     } catch (err) {
       console.warn('[useMeetingCall] Could not enable camera:', err);
       throw err;
     }
-  }, [cameraOff, sendTo]);
+  }, [cameraOff, switchVideoDevice]);
 
   useEffect(() => {
     const socket = getSocket();
@@ -580,6 +740,11 @@ export default function useMeetingCall({ userId, resolveGroupMembers, onEnd } = 
     localStream,
     muted,
     cameraOff,
+    noiseCancel,
+    audioDeviceId,
+    videoDeviceId,
+    audioDevices,
+    videoDevices,
     startMeeting,
     joinMeeting,
     declineMeeting,
@@ -587,6 +752,10 @@ export default function useMeetingCall({ userId, resolveGroupMembers, onEnd } = 
     endMeetingForAll,
     toggleMute,
     toggleCamera,
+    switchAudioDevice,
+    switchVideoDevice,
+    setNoiseCancel,
+    refreshDevices,
     inviteParticipant,
   };
 }

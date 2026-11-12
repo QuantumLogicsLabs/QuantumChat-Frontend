@@ -1,12 +1,13 @@
 import { motion } from 'framer-motion';
-import { Archive, Ban, BellOff, Bookmark, Check, ChevronLeft, ChevronRight, Lock, Mail, MoreVertical, Phone, Pin, Search, Unlock, UserPlus, Users, UserX, VolumeX, X } from 'lucide-react';
+import { Archive, Ban, BellOff, Bookmark, Check, ChevronDown, ChevronLeft, ChevronRight, Folder, FolderPlus, Lock, Mail, MoreVertical, Pencil, Phone, Pin, Search, Unlock, UserPlus, Users, UserX, VolumeX, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import client from '../api/client.js';
+import { useChatLock } from '../context/ChatLockContext.jsx';
 import { useVault } from '../context/VaultContext.jsx';
-import UserAvatar from './UserAvatar.jsx';
 import { getDisplayName } from '../utils/getDisplayName.js';
+import UserAvatar from './UserAvatar.jsx';
 
 function formatShortRelative(iso) {
   if (!iso) return '';
@@ -39,20 +40,38 @@ const FILTERS = [
 const FILTER_WINDOW = 3;
 const CONV_MENU_WIDTH = 190;
 const CONV_MENU_EST_HEIGHT = 230;
+const CONV_MENU_ITEM_HEIGHT = 40;
+const CONV_MENU_MAX_HEIGHT = 280; // matches .conv-row-dropdown max-height
 
-function computeConvMenuPosition(triggerEl) {
+// With this many folders or more, they collapse into one "Folders" dropdown
+// tab instead of crowding the filter row with one tab each.
+const FOLDER_DROPDOWN_MIN = 2;
+const FOLDER_MENU_WIDTH = 220;
+
+/** Fixed position for the folders dropdown, left-aligned under its tab. */
+function computeFolderMenuPosition(triggerEl, itemCount) {
+  const rect = triggerEl.getBoundingClientRect();
+  const pad = 12;
+  const estHeight = Math.min(CONV_MENU_MAX_HEIGHT, 48 + itemCount * CONV_MENU_ITEM_HEIGHT);
+  const openUp = window.innerHeight - rect.bottom - pad < estHeight && rect.top > window.innerHeight / 2;
+  const top = openUp ? Math.max(pad, rect.top - estHeight - 8) : rect.bottom + 8;
+  const left = Math.max(pad, Math.min(rect.left, window.innerWidth - FOLDER_MENU_WIDTH - pad));
+  return { top, left, openUp };
+}
+
+function computeConvMenuPosition(triggerEl, estHeight = CONV_MENU_EST_HEIGHT) {
   const rect = triggerEl.getBoundingClientRect();
   const gap = 8;
   const pad = 12;
   const spaceBelow = window.innerHeight - rect.bottom - pad;
   const spaceAbove = rect.top - pad;
-  const openUp = spaceBelow < CONV_MENU_EST_HEIGHT && spaceAbove > spaceBelow;
+  const openUp = spaceBelow < estHeight && spaceAbove > spaceBelow;
 
   let top = openUp
-    ? rect.top - CONV_MENU_EST_HEIGHT - gap
+    ? rect.top - estHeight - gap
     : rect.bottom + gap;
 
-  top = Math.max(pad, Math.min(top, window.innerHeight - CONV_MENU_EST_HEIGHT - pad));
+  top = Math.max(pad, Math.min(top, window.innerHeight - estHeight - pad));
 
   const isRtl = document.documentElement.dir === 'rtl';
   let left = 'auto';
@@ -83,7 +102,12 @@ export default function ConversationList({
   onMute,
   onArchive,
   onPin,
+  onToggleChatLock,
   onToggleVault,
+  chatFolders = [],
+  onCreateFolder,
+  onEditFolder,
+  onToggleChatInFolder,
   loading = false,
   searchQuery = '',
   hasMoreContacts = false,
@@ -108,6 +132,7 @@ export default function ConversationList({
 }) {
   const { t, i18n } = useTranslation();
   const { isUnlocked: vaultUnlocked, isPeerVaulted } = useVault();
+  const { isChatLocked } = useChatLock();
   const [discoverItems, setDiscoverItems] = useState([]);
   const [discoverLoading, setDiscoverLoading] = useState(false);
   const [discoverError, setDiscoverError] = useState('');
@@ -181,16 +206,68 @@ export default function ConversationList({
 
   const pendingFriendCount = incomingRequests.length;
 
+  // User folders sit right after the built-in All / Unread / Groups tabs:
+  // one tab per folder, or a single "Folders" dropdown once there are several.
+  const foldersAsDropdown = chatFolders.length >= FOLDER_DROPDOWN_MIN;
+  const baseFilters = useMemo(() => {
+    if (!chatFolders.length) return FILTERS;
+    const folderTabs = foldersAsDropdown
+      ? [{ id: 'folders', label: 'Folders', isFolderMenu: true }]
+      : chatFolders.map((f) => ({ id: `folder:${f.id}`, label: f.name, isFolder: true }));
+    const at = FILTERS.findIndex((f) => f.id === 'groups') + 1;
+    return [...FILTERS.slice(0, at), ...folderTabs, ...FILTERS.slice(at)];
+  }, [chatFolders, foldersAsDropdown]);
+
+  const activeFolder = filter.startsWith('folder:')
+    ? chatFolders.find((f) => `folder:${f.id}` === filter) || null
+    : null;
+  // Which tab is highlighted: in dropdown mode every folder lives under 'folders'.
+  const activeTabId = activeFolder && foldersAsDropdown ? 'folders' : filter;
+
+  const [folderMenuPos, setFolderMenuPos] = useState(null);
+  const closeFolderMenu = useCallback(() => setFolderMenuPos(null), []);
+
+  useEffect(() => {
+    if (!folderMenuPos) return undefined;
+    function onPointerDown(e) {
+      if (!e.target.closest('.folder-filter-trigger') && !e.target.closest('.folder-filter-dropdown')) {
+        closeFolderMenu();
+      }
+    }
+    function onKeyDown(e) {
+      if (e.key === 'Escape') closeFolderMenu();
+    }
+    function onScroll(e) {
+      if (e.target?.closest?.('.folder-filter-dropdown')) return;
+      closeFolderMenu();
+    }
+    document.addEventListener('pointerdown', onPointerDown);
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('scroll', onScroll, true);
+    window.addEventListener('resize', closeFolderMenu);
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown);
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('scroll', onScroll, true);
+      window.removeEventListener('resize', closeFolderMenu);
+    };
+  }, [folderMenuPos, closeFolderMenu]);
+
+  // Folders deleted down to one: the dropdown tab is gone, so drop its menu.
+  useEffect(() => {
+    if (!foldersAsDropdown) closeFolderMenu();
+  }, [foldersAsDropdown, closeFolderMenu]);
+
   const orderedFilters = useMemo(() => {
-    if (!pendingFriendCount) return FILTERS;
-    const friendsTab = FILTERS.find((f) => f.id === 'friends');
-    if (!friendsTab) return FILTERS;
+    if (!pendingFriendCount) return baseFilters;
+    const friendsTab = baseFilters.find((f) => f.id === 'friends');
+    if (!friendsTab) return baseFilters;
     return [
-      FILTERS[0],
+      baseFilters[0],
       friendsTab,
-      ...FILTERS.filter((f) => f.id !== 'all' && f.id !== 'friends'),
+      ...baseFilters.filter((f) => f.id !== 'all' && f.id !== 'friends'),
     ];
-  }, [pendingFriendCount]);
+  }, [pendingFriendCount, baseFilters]);
 
   const maxFilterStart = Math.max(0, orderedFilters.length - FILTER_WINDOW);
 
@@ -200,7 +277,7 @@ export default function ConversationList({
   );
 
   useEffect(() => {
-    const activeIndex = orderedFilters.findIndex((f) => f.id === filter);
+    const activeIndex = orderedFilters.findIndex((f) => f.id === activeTabId);
     if (activeIndex < 0) return;
     setFilterStart((start) => {
       if (activeIndex < start) return activeIndex;
@@ -209,7 +286,7 @@ export default function ConversationList({
       }
       return start;
     });
-  }, [filter, orderedFilters, maxFilterStart]);
+  }, [activeTabId, orderedFilters, maxFilterStart]);
 
   useEffect(() => {
     if (!pendingFriendCount) return;
@@ -375,15 +452,21 @@ export default function ConversationList({
           <span className="conv-row-time">{formatShortRelative(c.lastMessageAt)}</span>
         </span>
         <span className="user-list-sub-row">
-          <span className="user-list-lastseen">{c.subtitle || (c.isSelfChat ? 'Notes to self' : '')}</span>
-          {(c.unreadCount > 0 || c.unread) && (
-            <span className="unread-badge" aria-hidden="true">
-              {(c.unreadCount || 1) > 99 ? '99+' : c.unreadCount || 1}
-            </span>
-          )}
+          {isChatLocked(c.key) ? (
+        <span className="user-list-lastseen" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+          <Lock size={12} aria-hidden="true" /> Locked chat
+        </span>
+      ) : (
+        <span className="user-list-lastseen">{c.subtitle || (c.isSelfChat ? 'Notes to self' : '')}</span>
+      )}
+      {(c.unreadCount > 0 || c.unread) && (
+        <span className="unread-badge" aria-hidden="true">
+          {isChatLocked(c.key) ? '' : (c.unreadCount || 1) > 99 ? '99+' : c.unreadCount || 1}
+        </span>
+      )}
         </span>
       </span>
-{!c.isSelfChat && c.type === 'dm' && !c.peer?.isSystemUser && !vaultUnlocked && isPeerVaulted(c.id) && (
+      {!c.isSelfChat && c.type === 'dm' && !c.peer?.isSystemUser && !vaultUnlocked && isPeerVaulted(c.id) && (
       // Decoy view: shows regardless of which filter/tab rendered this row,
       // not just the "all" list's Other-users section. No real
       // friend-request call while locked.
@@ -467,7 +550,13 @@ export default function ConversationList({
                 setMenuPos(null);
                 return;
               }
-              setMenuPos(computeConvMenuPosition(e.currentTarget));
+              const folderRows = onToggleChatInFolder ? chatFolders.length + 2 : 0;
+              setMenuPos(
+                computeConvMenuPosition(
+                  e.currentTarget,
+                  Math.min(CONV_MENU_MAX_HEIGHT, CONV_MENU_EST_HEIGHT + folderRows * CONV_MENU_ITEM_HEIGHT),
+                ),
+              );
               setOpenMenuKey(c.key);
             }}
           >
@@ -515,6 +604,39 @@ export default function ConversationList({
                       <Archive size={14} /> {c.archived ? 'Unarchive' : 'Archive'}
                     </button>
                   )}
+                  {onToggleChatInFolder && (
+                    <>
+                      <div className="conv-row-dropdown-sep" role="separator" />
+                      <div className="conv-row-dropdown-title conv-row-dropdown-subtitle">Folders</div>
+                      {chatFolders.map((folder) => {
+                        const inFolder = folder.conversationKeys.map(String).includes(String(c.key));
+                        return (
+                          <button
+                            key={folder.id}
+                            type="button"
+                            role="menuitemcheckbox"
+                            aria-checked={inFolder}
+                            className={`conv-folder-item${inFolder ? ' is-checked' : ''}`}
+                            onClick={() => runMenuAction(() => onToggleChatInFolder(folder, c))}
+                          >
+                            <Folder size={14} />
+                            <span className="conv-folder-item-name">{folder.name}</span>
+                            {inFolder ? <Check size={14} className="conv-folder-check" aria-hidden="true" /> : null}
+                          </button>
+                        );
+                      })}
+                      {onCreateFolder && (
+                        <button
+                          type="button"
+                          role="menuitem"
+                          onClick={() => runMenuAction(() => onCreateFolder(c))}
+                        >
+                          <FolderPlus size={14} /> New folder…
+                        </button>
+                      )}
+                      <div className="conv-row-dropdown-sep" role="separator" />
+                    </>
+                  )}
                   {c.type === 'dm' && onHide && !c.isSelfChat && (
                     <button
                       type="button"
@@ -539,6 +661,11 @@ export default function ConversationList({
                           <Lock size={14} /> Add to vault
                         </>
                       )}
+                    </button>
+                  )}
+                  {onToggleChatLock && !c.isSelfChat && (
+                    <button type="button" role="menuitem" onClick={() => runMenuAction(() => onToggleChatLock(c))}>
+                      {isChatLocked(c.key) ? (<><Unlock size={14} /> Remove chat lock</>) : (<><Lock size={14} /> Lock chat</>)}
                     </button>
                   )}
                   {c.type === 'dm' && onBlock && !c.isSelfChat && (
@@ -575,21 +702,51 @@ export default function ConversationList({
 
         <div className="sidebar-filters" role="tablist" aria-label="Conversation filters">
           {visibleFilters.map((f) => {
+            if (f.isFolderMenu) {
+              const open = Boolean(folderMenuPos);
+              return (
+                <button
+                  key={f.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={activeTabId === f.id}
+                  aria-haspopup="menu"
+                  aria-expanded={open}
+                  className={`sidebar-filter-btn is-folder folder-filter-trigger${
+                    activeTabId === f.id ? ' active' : ''
+                  }${open ? ' is-open' : ''}`}
+                  title={activeFolder ? `Folder: ${activeFolder.name}` : 'Your folders'}
+                  onClick={(e) => {
+                    if (open) {
+                      closeFolderMenu();
+                      return;
+                    }
+                    setFolderMenuPos(
+                      computeFolderMenuPosition(e.currentTarget, chatFolders.length + (onCreateFolder ? 1 : 0)),
+                    );
+                  }}
+                >
+                  <span className="sidebar-filter-label">{activeFolder ? activeFolder.name : 'Folders'}</span>
+                  <ChevronDown size={14} strokeWidth={2.25} className="folder-filter-caret" aria-hidden="true" />
+                </button>
+              );
+            }
             const showFriendBadge = f.id === 'friends' && pendingFriendCount > 0;
             return (
               <button
                 key={f.id}
                 type="button"
                 role="tab"
-                aria-selected={filter === f.id}
+                aria-selected={activeTabId === f.id}
                 aria-label={
                   showFriendBadge
                     ? `Friends, ${pendingFriendCount} pending request${pendingFriendCount === 1 ? '' : 's'}`
                     : f.label
                 }
-                className={`sidebar-filter-btn${filter === f.id ? ' active' : ''}${
+                className={`sidebar-filter-btn${activeTabId === f.id ? ' active' : ''}${
                   showFriendBadge ? ' has-requests' : ''
-                }`}
+                }${f.isFolder ? ' is-folder' : ''}`}
+                title={f.isFolder ? f.label : undefined}
                 onClick={() => onFilterChange(f.id)}
               >
                 <span className="sidebar-filter-label">
@@ -624,12 +781,91 @@ export default function ConversationList({
         </button>
       </div>
 
+      {folderMenuPos
+        ? createPortal(
+            <div
+              className={`conv-row-dropdown folder-filter-dropdown open${folderMenuPos.openUp ? ' open-up' : ''}`}
+              role="menu"
+              aria-label="Folders"
+              style={{ top: folderMenuPos.top, left: folderMenuPos.left, right: 'auto' }}
+            >
+              <div className="conv-row-dropdown-title">Folders</div>
+              {chatFolders.map((folder) => {
+                const selected = activeFolder?.id === folder.id;
+                const count = folder.conversationKeys.length;
+                return (
+                  <button
+                    key={folder.id}
+                    type="button"
+                    role="menuitemradio"
+                    aria-checked={selected}
+                    className={`conv-folder-item${selected ? ' is-checked' : ''}`}
+                    onClick={() => {
+                      closeFolderMenu();
+                      onFilterChange(`folder:${folder.id}`);
+                    }}
+                  >
+                    <Folder size={14} />
+                    <span className="conv-folder-item-name">{folder.name}</span>
+                    <span className="conv-folder-item-count" aria-label={`${count} ${count === 1 ? 'chat' : 'chats'}`}>
+                      {count}
+                    </span>
+                    {selected ? <Check size={14} className="conv-folder-check" aria-hidden="true" /> : null}
+                  </button>
+                );
+              })}
+              {onCreateFolder ? (
+                <>
+                  <div className="conv-row-dropdown-sep" />
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      closeFolderMenu();
+                      onCreateFolder(null);
+                    }}
+                  >
+                    <FolderPlus size={14} /> New folder…
+                  </button>
+                </>
+              ) : null}
+            </div>,
+            document.body,
+          )
+        : null}
+
       <div className="sidebar-create-row">
         <button type="button" className="create-group-btn" onClick={onCreateGroup}>
           <UserPlus size={16} strokeWidth={2} aria-hidden="true" />
           {t('nav.newChat', 'New group')}
         </button>
+        {onCreateFolder ? (
+          <button type="button" className="create-group-btn" onClick={() => onCreateFolder(null)}>
+            <FolderPlus size={16} strokeWidth={2} aria-hidden="true" />
+            New folder
+          </button>
+        ) : null}
       </div>
+
+      {activeFolder ? (
+        <div className="folder-bar">
+          <Folder size={15} strokeWidth={2} aria-hidden="true" />
+          <span className="folder-bar-name">{activeFolder.name}</span>
+          <span className="folder-bar-count">
+            {activeFolder.conversationKeys.length} {activeFolder.conversationKeys.length === 1 ? 'chat' : 'chats'}
+          </span>
+          {onEditFolder ? (
+            <button
+              type="button"
+              className="folder-bar-edit"
+              onClick={() => onEditFolder(activeFolder)}
+              aria-label={`Edit folder ${activeFolder.name}`}
+            >
+              <Pencil size={13} strokeWidth={2.2} aria-hidden="true" /> Edit
+            </button>
+          ) : null}
+        </div>
+      ) : null}
 
       {filter === 'discover' || filter === 'public' ? (
         <div className="user-list discover-list">
@@ -1086,7 +1322,20 @@ export default function ConversationList({
 ) : (
   conversations.map((c, index) => renderConvItem(c, index, false))
 )}
-          {conversations.length === 0 && (
+          {conversations.length === 0 && activeFolder && !searchQuery.trim() ? (
+            <div className="friends-empty-card" role="status">
+              <Folder size={20} strokeWidth={1.75} aria-hidden="true" />
+              <p className="friends-empty-title">This folder is empty</p>
+              <p className="friends-empty-copy">
+                Add chats here, or use a chat&apos;s ⋮ menu to file it.
+              </p>
+              {onEditFolder ? (
+                <button type="button" className="friend-action-btn add" onClick={() => onEditFolder(activeFolder)}>
+                  Add chats
+                </button>
+              ) : null}
+            </div>
+          ) : conversations.length === 0 && (
             <p className="empty-hint">
               {searchQuery.trim()
                 ? 'No users or groups match your search.'

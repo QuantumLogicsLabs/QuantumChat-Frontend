@@ -1,3 +1,4 @@
+import { isConversationKeyLocked } from '../api/chatLockToken.js';
 import { cacheNotificationContent } from '../crypto/swAuthMirror.js';
 import { playReceiveSound, unlockAudio } from './sounds.js';
 
@@ -145,6 +146,13 @@ export function showNotificationPopup(
   if (typeof window === 'undefined' || !('Notification' in window)) return;
   if (Notification.permission !== 'granted') return;
   if (notifSettings?.webNotifications?.enabled === false) return;
+  if (tag && isConversationKeyLocked(tag)) {
+        title = 'QuantumChat';
+        body = 'New message';
+        tag = 'quantumchat-locked';
+        actions = undefined;
+        data = { url: '/chat' };
+      }
 
   const soundOnWeb = notifSettings?.webNotifications?.soundOnWeb !== false;
   const allowOsSound = soundOnWeb && notifSettings?.soundEnabled !== false;

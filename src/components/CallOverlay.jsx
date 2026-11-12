@@ -14,6 +14,7 @@ import {
   X,
 } from 'lucide-react';
 import { forwardRef, useCallback, useEffect, useRef, useState } from 'react';
+import CallDeviceMenu from './CallDeviceMenu.jsx';
 
 function attachStream(el, stream, { muted = false } = {}) {
   if (!el) return;
@@ -119,8 +120,8 @@ function injectPipStyles(doc) {
       margin: 0;
       width: 100%;
       height: 100%;
-      background: #0a2a1e;
-      color: #f8e7c9;
+      background: #1a1214;
+      color: #f6e6d8;
       font-family: system-ui, -apple-system, Segoe UI, sans-serif;
       overflow: hidden;
     }
@@ -130,7 +131,7 @@ function injectPipStyles(doc) {
       height: 100%;
       display: flex;
       flex-direction: column;
-      background: #0a2a1e;
+      background: #1a1214;
     }
     .pip-video {
       flex: 1;
@@ -199,7 +200,7 @@ function injectPipStyles(doc) {
       font-size: 42px;
       font-weight: 700;
       letter-spacing: 0.04em;
-      background: radial-gradient(circle at 30% 20%, #12402f, #0a2a1e 70%);
+      background: radial-gradient(circle at 30% 20%, #2d2022, #1a1214 70%);
     }
   `;
   doc.head.appendChild(style);
@@ -224,6 +225,14 @@ export default function CallOverlay({
   onToggleCamera,
   onToggleScreenShare,
   onOpenAddParticipant,
+  audioDevices = [],
+  videoDevices = [],
+  audioDeviceId = '',
+  videoDeviceId = '',
+  noiseCancel = true,
+  onSwitchAudioDevice,
+  onSwitchVideoDevice,
+  onSetNoiseCancel,
 }) {
   const remoteVideoRef = useRef(null);
   const pipWindowRef = useRef(null);
@@ -263,8 +272,18 @@ export default function CallOverlay({
   const isRinging = call?.status === 'ringing';
   const isActive = call?.status === 'active';
   const inMedia = call?.status === 'connecting' || isActive;
-  const showsRemoteVideo = inMedia && (call?.video || remoteScreen);
+  // Show remote video whenever the peer is actually sending a live video
+  // track (or screen). Do NOT require call.video — that flag is local and
+  // stayed false on voice calls even after the other person turned a camera on.
+  const hasRemoteLiveVideo = Boolean(
+    remoteStream?.getVideoTracks?.().some((t) => t.readyState === 'live'),
+  );
+  const hasLocalLiveVideo = Boolean(
+    !cameraOff && localStream?.getVideoTracks?.().some((t) => t.readyState === 'live'),
+  );
+  const showsRemoteVideo = inMedia && (hasRemoteLiveVideo || remoteScreen);
   const showsOwnScreenOnly = inMedia && screenSharing && !showsRemoteVideo;
+  const showsLocalPip = showsRemoteVideo && (hasLocalLiveVideo || screenSharing);
   const showsVideo = showsRemoteVideo || showsOwnScreenOnly;
   const canShareScreen =
     typeof onToggleScreenShare === 'function' &&
@@ -589,7 +608,7 @@ export default function CallOverlay({
             ) : (
               <VideoTile stream={screenStream} muted contain label="Your screen" />
             )}
-            {showsRemoteVideo && (call.video || screenSharing) ? (
+            {showsLocalPip ? (
               <div className="call-pip">
                 {screenSharing ? (
                   <VideoTile stream={screenStream} muted contain label="Your screen" />
@@ -657,24 +676,78 @@ export default function CallOverlay({
                   {pipActive ? <X size={18} /> : <PictureInPicture2 size={18} />}
                 </button>
               ) : null}
-              <button
-                type="button"
-                className={`call-ctrl${muted ? ' active' : ''}`}
-                onClick={onToggleMute}
-                aria-label={muted ? 'Unmute' : 'Mute'}
-                title={muted ? 'Unmute' : 'Mute'}
-              >
-                {muted ? <MicOff size={20} /> : <Mic size={20} />}
-              </button>
-              <button
-                type="button"
-                className={`call-ctrl${cameraOff ? ' active' : ''}`}
-                onClick={onToggleCamera}
-                aria-label={cameraOff ? 'Camera on' : 'Camera off'}
-                title={cameraOff ? 'Camera on' : 'Camera off'}
-              >
-                {cameraOff ? <VideoOff size={20} /> : <Video size={20} />}
-              </button>
+              {typeof onSwitchAudioDevice === 'function' ? (
+                <CallDeviceMenu
+                  active={muted}
+                  onToggle={onToggleMute}
+                  ariaLabel={muted ? 'Unmute' : 'Mute'}
+                  title={muted ? 'Unmute' : 'Mute'}
+                  menuTitle="Microphone"
+                  devices={audioDevices}
+                  selectedDeviceId={audioDeviceId}
+                  onSelectDevice={(id) => {
+                    onSwitchAudioDevice(id)?.catch?.(() => {});
+                  }}
+                  emptyLabel="No microphones found"
+                  extraOptions={
+                    typeof onSetNoiseCancel === 'function' ? (
+                      <button
+                        type="button"
+                        role="menuitemcheckbox"
+                        aria-checked={noiseCancel}
+                        className={`call-device-menu-item call-device-menu-toggle${noiseCancel ? ' is-selected' : ''}`}
+                        onClick={() => {
+                          onSetNoiseCancel(!noiseCancel)?.catch?.(() => {});
+                        }}
+                      >
+                        <span className="call-device-menu-check" aria-hidden="true">
+                          {noiseCancel ? '✓' : ''}
+                        </span>
+                        <span>Background noise cancellation</span>
+                      </button>
+                    ) : null
+                  }
+                >
+                  {muted ? <MicOff size={20} /> : <Mic size={20} />}
+                </CallDeviceMenu>
+              ) : (
+                <button
+                  type="button"
+                  className={`call-ctrl${muted ? ' active' : ''}`}
+                  onClick={onToggleMute}
+                  aria-label={muted ? 'Unmute' : 'Mute'}
+                  title={muted ? 'Unmute' : 'Mute'}
+                >
+                  {muted ? <MicOff size={20} /> : <Mic size={20} />}
+                </button>
+              )}
+              {typeof onSwitchVideoDevice === 'function' ? (
+                <CallDeviceMenu
+                  active={cameraOff}
+                  onToggle={onToggleCamera}
+                  ariaLabel={cameraOff ? 'Camera on' : 'Camera off'}
+                  title={cameraOff ? 'Camera on' : 'Camera off'}
+                  menuTitle="Camera"
+                  devices={videoDevices}
+                  selectedDeviceId={videoDeviceId}
+                  onSelectDevice={(id) => {
+                    onSwitchVideoDevice(id)?.catch?.(() => {});
+                  }}
+                  emptyLabel="No cameras found"
+                >
+                  {cameraOff ? <VideoOff size={20} /> : <Video size={20} />}
+                </CallDeviceMenu>
+              ) : (
+                <button
+                  type="button"
+                  className={`call-ctrl${cameraOff ? ' active' : ''}`}
+                  onClick={onToggleCamera}
+                  aria-label={cameraOff ? 'Camera on' : 'Camera off'}
+                  title={cameraOff ? 'Camera on' : 'Camera off'}
+                >
+                  {cameraOff ? <VideoOff size={20} /> : <Video size={20} />}
+                </button>
+              )}
               {supportsSpeaker ? (
                 <button
                   type="button"

@@ -615,3 +615,36 @@ body.theme-light .activity-item-icon.type-default {
     padding: 0.38rem 0.6rem;
   }
 }
+/* ---- Unread / notification-backed activity ---- */
+.activity-item.is-unread {
+  background: rgba(20, 184, 166, 0.07);
+  border-color: rgba(20, 184, 166, 0.25);
+}
+.activity-item.is-unread .activity-item-title { font-weight: 700; }
+.activity-unread-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #ef4444;
+  flex: 0 0 9px;
+  box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.18);
+}
+.activity-badge.has-unread .activity-badge-dot { background: #ef4444; }
+.activity-mark-all-btn {
+  margin-left: auto;
+  padding: 0.4rem 0.8rem;
+  border-radius: 999px;
+  border: 1px solid var(--border-subtle, #2a2e37);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+.activity-mark-all-btn:hover { background: var(--bg-elevated, #22262e); }
+.activity-mark-all-btn:disabled { opacity: 0.45; cursor: default; }
+.activity-load-more { display: block; margin: 0.75rem auto 0; }
+.activity-item-icon.type-message { background: rgba(59, 130, 246, 0.15); color: #60a5fa; }
+.activity-item-icon.type-story_mention { background: rgba(236, 72, 153, 0.15); color: #f472b6; }
+.activity-item-icon.type-missed_call { background: rgba(239, 68, 68, 0.15); color: #f87171; }
+.activity-item-icon.type-live { background: rgba(229, 38, 61, 0.15); color: #f05266; }

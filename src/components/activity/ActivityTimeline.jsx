@@ -15,7 +15,7 @@ export default function ActivityTimeline({ items = [], onOpen = () => {} }) {
   return (
     <ul className="activity-timeline">
       {items.map((it, idx) => (
-        <li key={idx}>
+        <li key={it.id || idx}>
           <ActivityItem item={it} onOpen={() => onOpen(it)} />
         </li>
       ))}

@@ -1,11 +1,24 @@
 import { formatDistanceToNow } from 'date-fns';
-import { UserPlus, Users, AtSign, SmilePlus, Bell, ChevronRight } from 'lucide-react';
+import {
+  AtSign,
+  Bell, ChevronRight,
+  MessageCircle,
+  PhoneMissed,
+  Radio,
+  SmilePlus,
+  Tag,
+  UserPlus, Users,
+} from 'lucide-react';
 
 const ICONS = {
   friend_request: UserPlus,
   group: Users,
   mention: AtSign,
   reaction: SmilePlus,
+  message: MessageCircle,
+  story_mention: Tag,
+  missed_call: PhoneMissed,
+  live: Radio,
 };
 
 export default function ActivityItem({ item = {}, onOpen = () => {} }) {
@@ -15,10 +28,27 @@ export default function ActivityItem({ item = {}, onOpen = () => {} }) {
   const originalAuthor = item.originalAuthorIsCurrentUser ? 'your' : (item.originalAuthorLabel ? `${item.originalAuthorLabel}'s` : 'a');
   switch (item.type) {
     case 'friend_request':
-      title = item.actorLabel || item.actorIsCurrentUser ? `${actor} sent you a friend request` : 'New friend request';
+      if (item.action === 'accepted') title = `${actor} accepted your friend request`;
+      else title = item.actorLabel || item.actorIsCurrentUser ? `${actor} sent you a friend request` : 'New friend request';
       break;
+    case 'message': {
+      const n = Number(item.count) || 1;
+      title = `${actor} sent you ${n > 1 ? `${n} new messages` : 'a new message'}`;
+      break;
+    }
     case 'mention':
-      title = `${actor} mentioned you${item.groupName ? ` in ${item.groupName}` : ''}`;
+      title = `${actor} mentioned you${item.groupName ? ` in ${item.groupName}` : ' in a group'}`;
+      break;
+    case 'story_mention':
+      title = `${actor} tagged you in their story`;
+      break;
+    case 'missed_call':
+      title = `Missed ${item.callType === 'video' ? 'video ' : ''}call from ${actor}`;
+      break;
+    case 'live':
+      title = item.invited
+        ? `${actor} invited you to watch their live video`
+        : `${actor} went live${item.title ? `: ${item.title}` : ''}`;
       break;
     case 'reaction':
       title = `${actor} reacted${item.emoji ? ` ${item.emoji}` : ''} to ${originalAuthor} message`;
@@ -39,7 +69,7 @@ export default function ActivityItem({ item = {}, onOpen = () => {} }) {
 
   return (
     <div
-      className="activity-item"
+      className={`activity-item${item.unread ? ' is-unread' : ''}`}
       onClick={onOpen}
       role="button"
       tabIndex={0}
@@ -58,6 +88,7 @@ export default function ActivityItem({ item = {}, onOpen = () => {} }) {
         {item.preview ? <div className="activity-item-preview">{item.preview}</div> : null}
         <div className="activity-item-meta">{when}</div>
       </div>
+      {item.unread ? <span className="activity-unread-dot" aria-label="Unread" /> : null}
       <ChevronRight size={16} className="activity-item-chevron" aria-hidden="true" />
     </div>
   );

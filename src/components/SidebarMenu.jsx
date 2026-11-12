@@ -1,10 +1,28 @@
-import { useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { CheckCheck, Lock, LogOut, MoreVertical, Settings, Star, Unlock } from 'lucide-react';
-import { Clock, Cake } from 'lucide-react';
+import { Cake, CheckCheck, Clock, Lock, LogOut, MoreVertical, Settings, Star, Unlock } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { preload } from '../utils/preload.js';
+
+// Self-contained (inline styles, no CSS file dependency) so the dot can't
+// silently go missing if a stylesheet edit didn't get applied.
+function UnreadDot({ style }) {
+  return (
+    <span
+      aria-hidden="true"
+      style={{
+        display: 'inline-block',
+        width: 9,
+        height: 9,
+        borderRadius: '50%',
+        background: '#ef4444',
+        flexShrink: 0,
+        ...style,
+      }}
+    />
+  );
+}
 
 export default function SidebarMenu({
   onSettings,
@@ -14,6 +32,7 @@ export default function SidebarMenu({
   vaultEnabled,
   vaultUnlocked,
   onOpenVault,
+  unreadNotificationCount = 0,
 }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -50,8 +69,12 @@ export default function SidebarMenu({
         onClick={() => setOpen((v) => !v)}
         whileHover={{ scale: 1.05 }}
         whileTap={{ scale: 0.97 }}
+        style={{ position: 'relative' }}
       >
         <MoreVertical size={18} strokeWidth={2.2} aria-hidden="true" />
+          {unreadNotificationCount > 0 && (
+            <UnreadDot style={{ position: 'absolute', top: 3, right: 3, border: '2px solid var(--bg-elevated, #fff)', width: 11, height: 11, boxSizing: 'border-box' }} />
+          )}
       </motion.button>
 
       <AnimatePresence>
@@ -154,6 +177,7 @@ export default function SidebarMenu({
               <span className="sidebar-menu-item-left">
                 <Clock size={16} aria-hidden="true" />
                 <span>{t('nav.activity', 'Activity')}</span>
+                 {unreadNotificationCount > 0 && <UnreadDot style={{ marginLeft: 8 }} />}
               </span>
             </button>
 

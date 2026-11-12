@@ -1,5 +1,6 @@
 import { useCallback, useState } from 'react';
 import { Mic, MicOff, Phone, PhoneOff, UserPlus, Users, Video, VideoOff, Volume2, VolumeX } from 'lucide-react';
+import CallDeviceMenu from './CallDeviceMenu.jsx';
 import VideoTile from './VideoTile.jsx';
 
 export default function MeetingOverlay({
@@ -16,6 +17,14 @@ export default function MeetingOverlay({
   onToggleMute,
   onToggleCamera,
   onOpenAddParticipant,
+  audioDevices = [],
+  videoDevices = [],
+  audioDeviceId = '',
+  videoDeviceId = '',
+  noiseCancel = true,
+  onSwitchAudioDevice,
+  onSwitchVideoDevice,
+  onSetNoiseCancel,
 }) {
   const [speakerActive, setSpeakerActive] = useState(false);
 
@@ -97,24 +106,78 @@ export default function MeetingOverlay({
             </>
           ) : (
             <>
-              <button
-                type="button"
-                className={`call-ctrl${muted ? ' active' : ''}`}
-                onClick={onToggleMute}
-                aria-label={muted ? 'Unmute' : 'Mute'}
-                title={muted ? 'Unmute' : 'Mute'}
-              >
-                {muted ? <MicOff size={20} /> : <Mic size={20} />}
-              </button>
-              <button
-                type="button"
-                className={`call-ctrl${cameraOff ? ' active' : ''}`}
-                onClick={onToggleCamera}
-                aria-label={cameraOff ? 'Camera on' : 'Camera off'}
-                title={cameraOff ? 'Camera on' : 'Camera off'}
-              >
-                {cameraOff ? <VideoOff size={20} /> : <Video size={20} />}
-              </button>
+              {typeof onSwitchAudioDevice === 'function' ? (
+                <CallDeviceMenu
+                  active={muted}
+                  onToggle={onToggleMute}
+                  ariaLabel={muted ? 'Unmute' : 'Mute'}
+                  title={muted ? 'Unmute' : 'Mute'}
+                  menuTitle="Microphone"
+                  devices={audioDevices}
+                  selectedDeviceId={audioDeviceId}
+                  onSelectDevice={(id) => {
+                    onSwitchAudioDevice(id)?.catch?.(() => {});
+                  }}
+                  emptyLabel="No microphones found"
+                  extraOptions={
+                    typeof onSetNoiseCancel === 'function' ? (
+                      <button
+                        type="button"
+                        role="menuitemcheckbox"
+                        aria-checked={noiseCancel}
+                        className={`call-device-menu-item call-device-menu-toggle${noiseCancel ? ' is-selected' : ''}`}
+                        onClick={() => {
+                          onSetNoiseCancel(!noiseCancel)?.catch?.(() => {});
+                        }}
+                      >
+                        <span className="call-device-menu-check" aria-hidden="true">
+                          {noiseCancel ? '✓' : ''}
+                        </span>
+                        <span>Background noise cancellation</span>
+                      </button>
+                    ) : null
+                  }
+                >
+                  {muted ? <MicOff size={20} /> : <Mic size={20} />}
+                </CallDeviceMenu>
+              ) : (
+                <button
+                  type="button"
+                  className={`call-ctrl${muted ? ' active' : ''}`}
+                  onClick={onToggleMute}
+                  aria-label={muted ? 'Unmute' : 'Mute'}
+                  title={muted ? 'Unmute' : 'Mute'}
+                >
+                  {muted ? <MicOff size={20} /> : <Mic size={20} />}
+                </button>
+              )}
+              {typeof onSwitchVideoDevice === 'function' ? (
+                <CallDeviceMenu
+                  active={cameraOff}
+                  onToggle={onToggleCamera}
+                  ariaLabel={cameraOff ? 'Camera on' : 'Camera off'}
+                  title={cameraOff ? 'Camera on' : 'Camera off'}
+                  menuTitle="Camera"
+                  devices={videoDevices}
+                  selectedDeviceId={videoDeviceId}
+                  onSelectDevice={(id) => {
+                    onSwitchVideoDevice(id)?.catch?.(() => {});
+                  }}
+                  emptyLabel="No cameras found"
+                >
+                  {cameraOff ? <VideoOff size={20} /> : <Video size={20} />}
+                </CallDeviceMenu>
+              ) : (
+                <button
+                  type="button"
+                  className={`call-ctrl${cameraOff ? ' active' : ''}`}
+                  onClick={onToggleCamera}
+                  aria-label={cameraOff ? 'Camera on' : 'Camera off'}
+                  title={cameraOff ? 'Camera on' : 'Camera off'}
+                >
+                  {cameraOff ? <VideoOff size={20} /> : <Video size={20} />}
+                </button>
+              )}
               {supportsSpeaker ? (
                 <button
                   type="button"

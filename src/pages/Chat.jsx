@@ -24,7 +24,13 @@ import { useTranslation } from "react-i18next";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { streamQuantumAI } from "../api/aiClient.js";
 import { fetchChatTheme, fetchGroupChatTheme, fetchGroupWallpaperImageUrl, fetchThemeCatalog, fetchWallpaperImageUrl } from '../api/chatThemes.js';
-import client, { muteChat, unmuteChat } from "../api/client.js";
+import client, {
+  muteChat,
+  unmuteChat,
+} from "../api/client.js";
+import { listSavedReplies } from "../api/savedReplies.js";
+import { listLive } from "../api/live.js";
+import { getUnreadCount as fetchUnreadNotificationCount } from "../api/notifications.js";
 import { postPresenceHeartbeat } from "../api/presence.js";
 import { connectSocket, getSocket } from "../api/socket.js";
 import { getPeerVaultDecoyStatus } from "../api/vault.js";
@@ -38,11 +44,14 @@ import InfoPanel from "../components/chat/InfoPanel.jsx";
 import MediaSendPreview from "../components/chat/MediaSendPreview.jsx";
 import MessageActionSheet from "../components/chat/MessageActionSheet.jsx";
 import SwipeableMessage from "../components/chat/SwipeableMessage.jsx";
+import ChatLockPinModal from "../components/ChatLockPinModal.jsx";
+import ChatLockSetupModal from "../components/ChatLockSetupModal.jsx";
 import ClearChatModal from "../components/ClearChatModal.jsx";
 import ConfirmDialog from "../components/ConfirmDialog.jsx";
 import DateSeparator from "../components/DateSeparator.jsx";
 import DragDropOverlay from "../components/DragDropOverlay.jsx";
 import EmojiPicker from "../components/EmojiPicker.jsx";
+import LazyChunkErrorBoundary, { ModalLoadingFallback, PanelLoadingFallback } from "../components/LazyChunkErrorBoundary.jsx";
 import MessageSearch from "../components/MessageSearch.jsx";
 import { useToast } from "../components/ToastProvider.jsx";
 import TypingIndicator from "../components/TypingIndicator.jsx";
@@ -50,26 +59,9 @@ import BottomSheet from "../components/ui/BottomSheet.jsx";
 import UserAvatar from "../components/UserAvatar.jsx";
 import VaultSetupModal from "../components/VaultSetupModal.jsx";
 import VaultUnlockModal from "../components/VaultUnlockModal.jsx";
-import LazyChunkErrorBoundary, { ModalLoadingFallback, PanelLoadingFallback } from "../components/LazyChunkErrorBoundary.jsx";
-import { preload, preloadOnIdle } from "../utils/preload.js";
-
-const AIAssistantPanel = lazy(() => import("../components/AIAssistantPanel.jsx"));
-const CameraCapture = lazy(() => import("../components/CameraCapture.jsx"));
-const ChatMediaModal = lazy(() => import("../components/chat/ChatMediaModal.jsx"));
-const ChatThemeModal = lazy(() => import("../components/ChatThemeModal.jsx"));
-const CreateGroupModal = lazy(() => import("../components/CreateGroupModal.jsx"));
-const EditHistoryModal = lazy(() => import("../components/EditHistoryModal.jsx"));
-const ForwardModal = lazy(() => import("../components/ForwardModal.jsx"));
-const GroupSettingsModal = lazy(() => import("../components/GroupSettingsModal.jsx"));
-const GroupCommandCenter = lazy(() => import("../components/GroupCommandCenter.jsx"));
-const ImageLightbox = lazy(() => import("../components/ImageLightbox.jsx"));
-const MeetingOverlay = lazy(() => import("../components/MeetingOverlay.jsx"));
-const MessageInfoModal = lazy(() => import("../components/MessageInfoModal.jsx"));
-const SettingsModal = lazy(() => import("../components/SettingsModal.jsx"));
-const StarredMessagesModal = lazy(() => import("../components/StarredMessagesModal.jsx"));
-const TimeCapsuleModal = lazy(() => import("../components/TimeCapsuleModal.jsx"));
-const UserProfileModal = lazy(() => import("../components/UserProfileModal.jsx"));
+import VoiceNoteBar from "../components/VoiceNoteBar.jsx";
 import { useAuth } from "../context/AuthContext.jsx";
+import { useChatLock } from "../context/ChatLockContext.jsx";
 import { useNotificationSettings } from "../context/NotificationSettingsContext.jsx";
 import { useVault } from "../context/VaultContext.jsx";
 import { sealBytesAsync, secretboxSealAsync } from "../crypto/encryptFileAsync.js";
@@ -91,26 +83,21 @@ import { compressVideo } from "../crypto/videoCompressor.js";
 import {
   attachmentIdOf,
   normalizeAttachment,
-  pickRecorderMimeType,
 } from "../crypto/voiceCache.js";
-import useMeetingCall from "../hooks/useMeetingCall.js";
+import useChatCalls from "../hooks/useChatCalls.js";
+import useChatFoldersAndPreferences from "../hooks/useChatFoldersAndPreferences.js";
+import useChatModerationAndClear from "../hooks/useChatModerationAndClear.js";
+import useChatSocketEvents from "../hooks/useChatSocketEvents.js";
+import useFriendships from "../hooks/useFriendships.js";
+import useLiveStream from "../hooks/useLiveStream.js";
+import usePinnedAndStarredMessages from "../hooks/usePinnedAndStarredMessages.js";
 import { useScreenshotProtection } from "../hooks/useScreenshotProtection.js";
-import useWebRTCCall from "../hooks/useWebRTCCall.js";
+import useVoiceRecorder from "../hooks/useVoiceRecorder.js";
 import { getWallpaperBackground, getWallpaperFx, preloadWallpaper } from '../theme/wallpaperBackgrounds.js';
 import activityStore from "../utils/activityStore.js";
-import { getOfflineMedia, removeOfflineMedia, saveOfflineMedia, updateOfflineMedia } from "../utils/offlineMediaQueue.js";
 import {
-  getAllOfflineMessages,
-  getOfflineMessages,
-  removeOfflineMessage,
-  saveOfflineMessage,
-} from "../utils/offlineMessageQueue.js";
-import {
-  getArchivedChatKeys,
   getChatDraft,
   getInfoPanelOpen,
-  getMutedChatKeys,
-  getPinnedChatKeys,
   isChatMuted,
   saveChatDraft,
   setInfoPanelOpen,
@@ -124,6 +111,7 @@ import {
   selectionFromParams,
 } from "../utils/chatRoutes.js";
 import { updateFaviconBadge } from "../utils/faviconBadge.js";
+import { formatLastSeen } from "../utils/formatLastSeen.js";
 import { getDisplayName } from "../utils/getDisplayName.js";
 import {
   encodeAnnouncement,
@@ -132,6 +120,7 @@ import {
   encodePoll,
   extractMentions,
   isGroupAdmin,
+  preferConfirmedThreadText,
 } from "../utils/groupPayload.js";
 import {
   getHiddenChatIds,
@@ -139,23 +128,11 @@ import {
   unhideChat,
 } from "../utils/hiddenChats.js";
 import {
-  clearAllStarred,
-  clearAutoImportantRemoval,
   deleteMessageForMe,
-  getAutoImportantRemovedIds,
   getDeletedForMeIds,
   getPinnedIds,
   getStarredEntries,
-  getStarredIds,
-  rememberAutoImportantRemoval,
-  restoreStarredEntries,
-  togglePinnedMessage,
-  toggleStarredMessage,
 } from "../utils/messageExtras.js";
-import {
-  getAutomaticImportantSource,
-  isAutomaticImportantMessage,
-} from "../utils/importantMessages.js";
 import { getMessagePreviewText } from "../utils/messagePreview.js";
 import {
   buildGroupedNotificationText,
@@ -163,6 +140,14 @@ import {
   shouldNotify,
   showNotificationPopup
 } from "../utils/notificationDispatch.js";
+import { getOfflineMedia, removeOfflineMedia, saveOfflineMedia, updateOfflineMedia } from "../utils/offlineMediaQueue.js";
+import {
+  getAllOfflineMessages,
+  getOfflineMessages,
+  removeOfflineMessage,
+  saveOfflineMessage,
+} from "../utils/offlineMessageQueue.js";
+import { preload, preloadOnIdle } from "../utils/preload.js";
 import { enablePushNotifications } from "../utils/pushNotifications.js";
 import {
   conversationKeyForGroup,
@@ -175,8 +160,28 @@ import {
   setConversationActivity,
 } from "../utils/readState.js";
 import { shouldEnforceScreenshotProtection } from "../utils/screenshotProtection.js";
-import { formatLastSeen } from "../utils/formatLastSeen.js";
-import { playReceiveSound, playSendSound, startIncomingRingSound, unlockAudio } from "../utils/sounds.js";
+import { playReceiveSound, playSendSound, unlockAudio } from "../utils/sounds.js";
+import { setVoiceThreadOrder } from "../utils/voicePlaybackQueue.js";
+
+const AIAssistantPanel = lazy(() => import("../components/AIAssistantPanel.jsx"));
+const CameraCapture = lazy(() => import("../components/CameraCapture.jsx"));
+const ChatFolderModal = lazy(() => import("../components/ChatFolderModal.jsx"));
+const ChatMediaModal = lazy(() => import("../components/chat/ChatMediaModal.jsx"));
+const ChatThemeModal = lazy(() => import("../components/ChatThemeModal.jsx"));
+const CreateGroupModal = lazy(() => import("../components/CreateGroupModal.jsx"));
+const EditHistoryModal = lazy(() => import("../components/EditHistoryModal.jsx"));
+const ForwardModal = lazy(() => import("../components/ForwardModal.jsx"));
+const GroupSettingsModal = lazy(() => import("../components/GroupSettingsModal.jsx"));
+const GroupCommandCenter = lazy(() => import("../components/GroupCommandCenter.jsx"));
+const ImageLightbox = lazy(() => import("../components/ImageLightbox.jsx"));
+const MeetingOverlay = lazy(() => import("../components/MeetingOverlay.jsx"));
+const GoLiveModal = lazy(() => import("../components/live/GoLiveModal.jsx"));
+const LiveStreamOverlay = lazy(() => import("../components/live/LiveStreamOverlay.jsx"));
+const MessageInfoModal = lazy(() => import("../components/MessageInfoModal.jsx"));
+const SettingsModal = lazy(() => import("../components/SettingsModal.jsx"));
+const StarredMessagesModal = lazy(() => import("../components/StarredMessagesModal.jsx"));
+const TimeCapsuleModal = lazy(() => import("../components/TimeCapsuleModal.jsx"));
+const UserProfileModal = lazy(() => import("../components/UserProfileModal.jsx"));
 
 const DEFAULT_CHAT_THEME = { presetId: 'default', bubbleColorId: 'default', wallpaperId: 'none' };
 
@@ -190,11 +195,6 @@ const CHUNK_SIZE = 4 * 1024 * 1024; // 4 MB
 function formatLastSeenLabel(iso) {
   if (!iso) return "last seen recently";
   return formatLastSeen(iso);
-}
-
-function formatVoiceTimer(seconds) {
-  const s = Math.max(0, Math.floor(seconds));
-  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 }
 
 function formatFileSize(bytes) {
@@ -257,20 +257,6 @@ function isSameDay(d1, d2) {
   );
 }
 
-/** Whether a message belongs to a Clear-chat scope bucket. */
-function messageMatchesClearScope(message, scope) {
-  if (scope === "all") return true;
-  const category = message?.mediaCategory;
-  const hasAttachment = Boolean(
-    message?.attachment &&
-      (typeof message.attachment === "object"
-        ? message.attachment.id || message.attachment._id
-        : message.attachment),
-  );
-  if (scope === "text") return !category && !hasAttachment;
-  return category === scope;
-}
-
 export default function Chat() {
   const { t, i18n } = useTranslation();
   const {
@@ -285,6 +271,10 @@ export default function Chat() {
   } = useAuth();
   const { showToast } = useToast();
   const { isUnlocked: vaultUnlocked, isPeerVaulted, vaultEnabled, addPeer: addVaultPeer, removePeer: removeVaultPeer, lock: lockVault } = useVault();
+  const { enabled: chatLockEnabled, isUnlocked: chatLockUnlocked, isChatLocked, unlock: unlockChatLock, lockChat, unlockChat, ready: chatLockReady } = useChatLock();
+  const [showChatLockSetup, setShowChatLockSetup] = useState(false);
+  const [pendingLockKey, setPendingLockKey] = useState(null);
+  const [removeLockKey, setRemoveLockKey] = useState(null);
   const [showVaultSetup, setShowVaultSetup] = useState(false);
   const [showVaultUnlock, setShowVaultUnlock] = useState(false);
   const [pendingVaultPeerId, setPendingVaultPeerId] = useState(null);
@@ -300,48 +290,82 @@ export default function Chat() {
   const [selected, setSelected] = useState(null); // { type: 'dm'|'group', id, ... }
   const [messages, setMessages] = useState([]);
   const [draft, setDraft] = useState("");
+  const [savedReplies, setSavedReplies] = useState([]);
+  const [savedRepliesLoading, setSavedRepliesLoading] = useState(false);
+  const [savedRepliesError, setSavedRepliesError] = useState("");
+  const [savedReplyOpen, setSavedReplyOpen] = useState(false);
+  const [savedReplyQuery, setSavedReplyQuery] = useState("");
+  const [savedReplyIndex, setSavedReplyIndex] = useState(0);
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("all");
   const [showCreateGroup, setShowCreateGroup] = useState(false);
-  const [showAddParticipantModal, setShowAddParticipantModal] = useState(false);
+  const {
+    folderEditor,
+    setFolderEditor,
+    mutedKeys,
+    setMutedKeys,
+    archivedKeys,
+    setArchivedKeys,
+    pinnedChatKeys,
+    setPinnedChatKeys,
+    chatFolders,
+    activeFolder,
+    applyFolders,
+    handleSaveFolder,
+    handleDeleteFolder,
+    handleToggleChatInFolder,
+  } = useChatFoldersAndPreferences({
+    user,
+    filter,
+    setFilter,
+    updateSessionUser,
+    showToast,
+  });
   const [showSettings, setShowSettings] = useState(false);
   const [replyTo, setReplyTo] = useState(null);
   const [editingMessage, setEditingMessage] = useState(null);
   const [importError, setImportError] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [loadingUsers, setLoadingUsers] = useState(false);
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [hasUnread, setHasUnread] = useState(false);
-  const [recording, setRecording] = useState(false);
-  const [recordSeconds, setRecordSeconds] = useState(0);
-  const [sendingVoice, setSendingVoice] = useState(false);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [hiddenChatIds, setHiddenChatIds] = useState(() =>
     getHiddenChatIds(user?.id),
   );
-  const [mutedKeys, setMutedKeys] = useState(() => getMutedChatKeys(user?.id));
-  const [archivedKeys, setArchivedKeys] = useState(() =>
-    getArchivedChatKeys(user?.id),
-  );
-  const [pinnedChatKeys, setPinnedChatKeys] = useState(() =>
-    getPinnedChatKeys(user?.id),
-  );
   const [confirmDialog, setConfirmDialog] = useState(null);
   const [confirmBusy, setConfirmBusy] = useState(false);
-  const [clearChatOpen, setClearChatOpen] = useState(false);
-  const [clearChatBusy, setClearChatBusy] = useState(false);
   const [activityTick, setActivityTick] = useState(0);
-  const [friendCandidates, setFriendCandidates] = useState([]);
-  const [friendCandidatesLoading, setFriendCandidatesLoading] = useState(false);
-  const [incomingRequests, setIncomingRequests] = useState([]);
-  const [outgoingRequests, setOutgoingRequests] = useState([]);
-  const [myFriends, setMyFriends] = useState([]);
-  const [myFriendsLoading, setMyFriendsLoading] = useState(false);
-  const [contactQuery, setContactQuery] = useState("");
-  const [contactLookupResult, setContactLookupResult] = useState(null);
-  const [contactLookupLoading, setContactLookupLoading] = useState(false);
-  const [contactLookupError, setContactLookupError] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!user?.id) {
+      setSavedReplies([]);
+      setSavedRepliesError("");
+      setSavedReplyOpen(false);
+      setSavedReplyQuery("");
+      return undefined;
+    }
+    setSavedReplyOpen(false);
+    setSavedReplyQuery("");
+    setSavedRepliesLoading(true);
+    listSavedReplies()
+      .then((replies) => {
+        if (!cancelled) {
+          setSavedReplies(replies);
+          setSavedRepliesError("");
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) setSavedRepliesError(err.response?.data?.error || "Could not load saved replies");
+      })
+      .finally(() => {
+        if (!cancelled) setSavedRepliesLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.id]);
 
   // Preload MeetingOverlay chunk on idle and when a chat that can start a call is opened
   useEffect(() => {
@@ -363,14 +387,8 @@ export default function Chat() {
   const [deletedForMeIds, setDeletedForMeIds] = useState(() =>
     getDeletedForMeIds(user?.id),
   );
-  const [starredIds, setStarredIds] = useState(() => getStarredIds(user?.id));
-  const [importantEntries, setImportantEntries] = useState([]);
-  const [importantLoading, setImportantLoading] = useState(false);
-  const [showStarredMessages, setShowStarredMessages] = useState(false);
   const [showChatMedia, setShowChatMedia] = useState(false);
-  const [starredScope, setStarredScope] = useState('all'); // 'all' | 'chat'
   const [pendingJumpMessageId, setPendingJumpMessageId] = useState(null);
-  const [pinnedIds, setPinnedIds] = useState([]);
   const [forwardMessage, setForwardMessage] = useState(null);
   const [forwardBusy, setForwardBusy] = useState(false);
   const [hasMoreMessages, setHasMoreMessages] = useState(false);
@@ -379,7 +397,6 @@ export default function Chat() {
   const [uploads, setUploads] = useState([]);
   const [cameraOpen, setCameraOpen] = useState(false);
   const [disappearSeconds, setDisappearSeconds] = useState(0);
-  const importantEntriesRef = useRef([]);
   const [capsuleUnlocksAt, setCapsuleUnlocksAt] = useState("");
   const [showCapsulePicker, setShowCapsulePicker] = useState(false);
   const [mediaPreview, setMediaPreview] = useState(null);
@@ -417,7 +434,6 @@ export default function Chat() {
   const [actionSheetMessage, setActionSheetMessage] = useState(null);
   const [messageInfoData, setMessageInfoData] = useState(null);
   const [editHistoryMessage, setEditHistoryMessage] = useState(null);
-  const [callMinimized, setCallMinimized] = useState(false);
   const [isMobileShell, setIsMobileShell] = useState(() =>
     typeof window !== "undefined"
       ? window.matchMedia("(max-width: 768px)").matches
@@ -434,15 +450,33 @@ export default function Chat() {
   const [chatTheme, setChatTheme] = useState(DEFAULT_CHAT_THEME);
   const [customWallpaperUrl, setCustomWallpaperUrl] = useState(null);
   const [themeModalOpen, setThemeModalOpen] = useState(false);
-  const [usersCursor, setUsersCursor] = useState(null);
-  const [usersHasMore, setUsersHasMore] = useState(false);
-  const [groupsCursor, setGroupsCursor] = useState(null);
-  const [groupsHasMore, setGroupsHasMore] = useState(false);
   const [searchResults, setSearchResults] = useState(null); // null = not searching
   const [searchLoading, setSearchLoading] = useState(false);
   const searchDebounceRef = useRef(null);
   const draftConversationKeyRef = useRef(null);
   const draftReadyConversationKeyRef = useRef(null);
+  const hasShownUnreadPopupRef = useRef(false);
+  const [unreadNotificationCount, setUnreadNotificationCount] = useState(0);
+useEffect(() => {
+  if (!user?.id) return;
+  let active = true;
+  fetchUnreadNotificationCount()
+    .then((count) => {
+      if (!active) return;
+      setUnreadNotificationCount(count);
+      if (count > 0 && !hasShownUnreadPopupRef.current) {
+        hasShownUnreadPopupRef.current = true;
+        showToast(
+          `You have ${count} unread ${count === 1 ? 'update' : 'updates'} — check all the unread activities`,
+          'info',
+          8000,
+          { actionLabel: 'View Activity', onAction: () => navigate('/chat/activity') }
+        );
+      }
+    })
+    .catch(() => {});
+  return () => { active = false; };
+}, [user?.id, location.pathname]);
 
   useEffect(() => {
     if (
@@ -578,12 +612,6 @@ useEffect(() => {
   const selectedRef = useRef(null);
   const userRef = useRef(user);
   const messagesRef = useRef([]);
-  const mediaRecorderRef = useRef(null);
-  const mediaStreamRef = useRef(null);
-  const recordChunksRef = useRef([]);
-  const recordTimerRef = useRef(null);
-  const recordStartedAtRef = useRef(0);
-  const notifiedCallIdRef = useRef(null);
   const dragCountRef = useRef(0);
    const imageSrcMapRef = useRef(new Map());
   const videoSrcMapRef = useRef(new Map());
@@ -597,6 +625,59 @@ useEffect(() => {
   messagesRef.current = messages;
   usersRef.current = users;
   groupsRef.current = groups;
+
+  const {
+    friendCandidates,
+    setFriendCandidates,
+    friendCandidatesLoading,
+    incomingRequests,
+    setIncomingRequests,
+    outgoingRequests,
+    setOutgoingRequests,
+    myFriends,
+    setMyFriends,
+    myFriendsLoading,
+    contactQuery,
+    setContactQuery,
+    contactLookupResult,
+    setContactLookupResult,
+    contactLookupLoading,
+    contactLookupError,
+    setContactLookupError,
+    onContactQueryChange,
+    loadingUsers,
+    usersCursor,
+    usersHasMore,
+    groupsCursor,
+    groupsHasMore,
+    hasMoreContacts,
+    loadDirectory,
+    loadMoreContacts,
+    loadFriendDiscover,
+    loadFriendRequests,
+    loadMyFriends,
+    applyAcceptedFriendship,
+    isFriendWith,
+    handleLookupContact,
+    handleSendFriendRequest,
+    handleNotFriendsError,
+    handleCancelFriendRequest,
+    executeAcceptFriendRequest,
+    handleAcceptFriendRequest,
+    handleDeclineFriendRequest,
+    handleRemoveFriend,
+  } = useFriendships({
+    user,
+    userRef,
+    hasLocalKeyring,
+    setUsers,
+    setGroups,
+    updateSessionUser,
+    showToast,
+    search,
+    filter,
+    setConfirmDialog,
+  });
 
   function stopTyping({ emit = true } = {}) {
     clearTimeout(typingTimeoutRef.current);
@@ -646,68 +727,32 @@ useEffect(() => {
     };
   }, [user?.id]);
 
-  const webrtc = useWebRTCCall({
-    userId: user?.id,
-    resolvePeerPublicKeys: async (peerId) => {
-      if (String(peerId) === String(user?.id)) return user?.publicKeys || [];
-      const peer =
-        (selectedRef.current?.type === "dm" &&
-          String(selectedRef.current.id) === String(peerId) &&
-          selectedRef.current.peer) ||
-        usersRef.current.find((u) => String(u.id) === String(peerId));
-      return peer?.publicKeys || [];
-    },
-    onMissed: (call) => {
-      showToast("Call ended or declined", "info");
-      if (notifSettings?.callNotifications?.missedCallReminders === false) return;
-      if (!shouldNotify(notifSettings, { kind: "call" })) return;
-      const caller =
-        users.find((u) => String(u.id) === String(call?.peerId))?.displayName ||
-        users.find((u) => String(u.id) === String(call?.peerId))?.username ||
-        "Someone";
-      showNotificationPopup(
-        { title: caller, body: "Missed call" },
-        notifSettings,
-        () => { },
-      );
-    },
-    onEnd: async (info) => {
-      try {
-        if (info.role !== "caller") return;
-        const peerId = String(info.peerId);
-        const peer = usersRef.current.find((u) => String(u.id) === peerId);
-        const myKey = pickRandom(getCurrentKeySet(user.id));
-        const recipientKeys = (peer?.publicKeys || []).filter(Boolean);
-        if (!myKey?.publicKey || recipientKeys.length === 0) return;
-        const payload = JSON.stringify({
-          __type: "call",
-          callId: info.callId,
-          video: info.video,
-          role: info.role,
-          answered: !!info.answered,
-          durationSeconds: Number(info.durationSeconds) || 0,
-          reason: info.reason || null,
-          endedAt: new Date().toISOString(),
-        });
-        const forRecipient = sealMessage(payload, pickRandom(recipientKeys));
-        const forSender = sealMessage(payload, myKey.publicKey);
-        const { data } = await client.post("/messages", {
-          to: peerId,
-          forRecipient,
-          forSender,
-        });
-        recordActivityFromMessage(data.data);
-        setMessages((prev) => {
-          const id = String(data.data.id || data.data._id);
-          if (prev.some((m) => String(m.id || m._id) === id)) return prev;
-          return [...prev, decorate(data.data)];
-        });
-        playSendSound();
-        setTimeout(() => scrollToBottom("smooth"), 50);
-      } catch (err) {
-        /* ignore send errors */
-      }
-    },
+  const {
+    webrtc,
+    meetingCall,
+    callMinimized,
+    setCallMinimized,
+    showAddParticipantModal,
+    setShowAddParticipantModal,
+    handleStartCall,
+    handleStartMeeting,
+    handleAddParticipant,
+    currentParticipantIds,
+  } = useChatCalls({
+    user,
+    users,
+    usersRef,
+    groupsRef,
+    selected,
+    selectedRef,
+    getTitle: () => title,
+    notifSettings,
+    showToast,
+    setMessages,
+    sealGroupEnvelopes,
+    decorate: (raw) => decorate(raw),
+    recordActivityFromMessage: (raw) => recordActivityFromMessage(raw),
+    scrollToBottom: (b) => scrollToBottom(b),
   });
 
   // Sends a reply typed directly into a notification's inline text field,
@@ -876,58 +921,6 @@ useEffect(() => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draft]);
 
-  useEffect(() => {
-    const call = webrtc.call;
-    if (!call || call.role !== "callee" || call.status !== "incoming") return;
-
-    const enabled = call.video
-      ? notifSettings?.callNotifications?.videoCallEnabled !== false
-      : notifSettings?.callNotifications?.voiceCallEnabled !== false;
-    if (!enabled || !shouldNotify(notifSettings, { kind: "call" })) return;
-
-    const caller =
-      users.find((u) => String(u.id) === String(call.peerId))?.displayName ||
-      users.find((u) => String(u.id) === String(call.peerId))?.username ||
-      "Someone";
-
-    if (notifiedCallIdRef.current !== call.callId) {
-      notifiedCallIdRef.current = call.callId;
-      showNotificationPopup(
-        {
-          title: caller,
-          body: call.video ? "Incoming video call" : "Incoming voice call",
-          requireInteraction: true,
-          silent: false,
-          tag: `call:${call.callId}`,
-        },
-        notifSettings,
-        () => {
-          window.focus();
-        },
-      );
-      if (notifSettings?.callNotifications?.vibrateOnCall && navigator.vibrate) {
-        navigator.vibrate([200, 100, 200, 100, 200]);
-      }
-    }
-
-    const volumeScale =
-      typeof notifSettings?.soundVolume === "number"
-        ? notifSettings.soundVolume / 100
-        : 0.8;
-    const stopRing =
-      notifSettings?.soundEnabled === false
-        ? () => { }
-        : startIncomingRingSound(volumeScale);
-
-    return () => {
-      stopRing();
-    };
-  }, [webrtc.call, users, notifSettings]);
-
-  useEffect(() => {
-    if (!webrtc.call) setCallMinimized(false);
-  }, [webrtc.call]);
-
   // Unlock Web Audio after the first user gesture so later alerts can play
   // even when QuantumChat is in a background tab.
   useEffect(() => {
@@ -940,57 +933,101 @@ useEffect(() => {
     };
   }, []);
 
-  const meetingCall = useMeetingCall({
-    userId: user?.id,
-    resolveGroupMembers: async (groupId) => {
-      const group =
-        (selectedRef.current?.type === "group" &&
-          String(selectedRef.current.id) === String(groupId) &&
-          selectedRef.current.group) ||
-        groupsRef.current.find((g) => String(g.id) === String(groupId));
-      if (!group) return null;
-      return { groupName: group.name, members: group.members || [] };
-    },
-    onEnd: async (info) => {
+  // ---- Live streaming --------------------------------------------------
+  const liveCall = useLiveStream({ user });
+  const [liveStreams, setLiveStreams] = useState([]);
+  const [showGoLive, setShowGoLive] = useState(false);
+  const liveCallLiveRef = useRef(null);
+  liveCallLiveRef.current = liveCall.live;
+
+  const refreshLiveStreams = useCallback(async () => {
+    try {
+      setLiveStreams(await listLive());
+    } catch {
+      /* keep the last list */
+    }
+  }, []);
+
+  const watchLive = useCallback(
+    async (streamId) => {
+      if (webrtc.call || meetingCall.meeting) {
+        showToast("Finish your call before joining a live video", "info");
+        return;
+      }
       try {
-        if (info.role !== "host") return;
-        const group = groupsRef.current.find(
-          (g) => String(g.id) === String(info.groupId),
-        );
-        if (!group) return;
-        const payload = JSON.stringify({
-          __type: "meeting",
-          meetingId: info.meetingId,
-          video: info.video,
-          participantCount: info.participantCount,
-          durationSeconds: Number(info.durationSeconds) || 0,
-          reason: info.reason || null,
-          endedAt: new Date().toISOString(),
-        });
-        const isPublic = group.visibility === "public";
-        const body = { kind: "text" };
-        if (isPublic) {
-          body.content = payload;
-        } else {
-          body.envelopes = sealGroupEnvelopes(payload, group);
-        }
-        const { data } = await client.post(
-          `/groups/${group.id}/messages`,
-          body,
-        );
-        recordActivityFromMessage(data.data);
-        setMessages((prev) => {
-          const id = String(data.data.id || data.data._id);
-          if (prev.some((m) => String(m.id || m._id) === id)) return prev;
-          return [...prev, decorate(data.data)];
-        });
-        playSendSound();
-        setTimeout(() => scrollToBottom("smooth"), 50);
+        await liveCall.watch(streamId);
       } catch (err) {
-        /* ignore send errors */
+        const status = err?.response?.status;
+        showToast(
+          status === 410
+            ? "This live video has ended"
+            : status === 403
+              ? "You can't watch this live video"
+              : err?.response?.data?.error || err?.message || "Could not join the live video",
+          status === 410 ? "info" : "error",
+        );
+        refreshLiveStreams();
       }
     },
-  });
+    [liveCall, meetingCall.meeting, refreshLiveStreams, showToast, webrtc.call],
+  );
+  const watchLiveRef = useRef(watchLive);
+  watchLiveRef.current = watchLive;
+
+  const openGoLive = useCallback(() => {
+    if (liveCall.live) return;
+    if (webrtc.call || meetingCall.meeting) {
+      showToast("Finish your call before going live", "info");
+      return;
+    }
+    loadMyFriends();
+    setShowGoLive(true);
+  }, [liveCall.live, meetingCall.meeting, showToast, webrtc.call]);
+
+  // "Live now" list: on load, every 30s, and whenever the server tells us
+  // someone in our audience went live / ended (socket only — REST-only
+  // deployments rely on the poll).
+  useEffect(() => {
+    if (!hasLocalKeyring || !user?.id) return undefined;
+    refreshLiveStreams();
+    const timer = window.setInterval(refreshLiveStreams, 30_000);
+    const socket = getSocket();
+    function onStarted(stream) {
+      refreshLiveStreams();
+      const name = stream?.host?.displayName || stream?.host?.username || "A friend";
+      if (!stream?.id || liveCallLiveRef.current) return;
+      showToast(`${name} is live${stream.title ? `: ${stream.title}` : ""}`, "info", 8000, {
+        actionLabel: "Watch",
+        onAction: () => watchLiveRef.current(stream.id),
+      });
+    }
+    function onInvited(stream) {
+      refreshLiveStreams();
+      const name = stream?.host?.displayName || stream?.host?.username || "A friend";
+      if (!stream?.id || liveCallLiveRef.current) return;
+      showToast(`${name} invited you to their live video`, "info", 10000, {
+        actionLabel: "Watch",
+        onAction: () => watchLiveRef.current(stream.id),
+      });
+    }
+    socket?.on("live:started", onStarted);
+    socket?.on("live:invited", onInvited);
+    socket?.on("live:ended", refreshLiveStreams);
+    return () => {
+      window.clearInterval(timer);
+      socket?.off("live:started", onStarted);
+      socket?.off("live:invited", onInvited);
+      socket?.off("live:ended", refreshLiveStreams);
+    };
+  }, [hasLocalKeyring, user?.id, refreshLiveStreams, showToast]);
+
+  // /chat/live/:streamId — opened from a go-live notification.
+  useEffect(() => {
+    if (!params.streamId || !hasLocalKeyring) return;
+    const id = params.streamId;
+    navigate("/chat", { replace: true });
+    watchLiveRef.current(id);
+  }, [params.streamId, hasLocalKeyring, navigate]);
 
   const bumpActivity = useCallback(() => setActivityTick((n) => n + 1), []);
 
@@ -1115,111 +1152,38 @@ useEffect(() => {
     [user, resolveMySecretKey],
   );
 
-  // Refs so Important-messages mapping can use latest directory/decrypt
-  // helpers without re-fetching (and re-toasting) every time users/groups change.
-  const importantDecorateRef = useRef(decorate);
-  importantDecorateRef.current = decorate;
-  const importantUsersRef = useRef(users);
-  importantUsersRef.current = users;
-  const importantGroupsRef = useRef(groups);
-  importantGroupsRef.current = groups;
-
-  const loadImportantMessages = useCallback(async () => {
-    if (!user?.id) return;
-    setImportantLoading(true);
-    try {
-      const { data } = await client.get('/messages/important');
-      const markedAtById = new Map(
-        (data?.data?.entries || []).map((entry) => [String(entry.messageId), entry.markedAt]),
-      );
-      const directoryUsers = importantUsersRef.current;
-      const directoryGroups = importantGroupsRef.current;
-      const next = (data?.data?.messages || []).map((raw) => {
-        const message = importantDecorateRef.current(raw);
-        const messageId = String(message.id || message._id);
-        const groupId = raw.group ? String(raw.group) : null;
-        const group = groupId
-          ? directoryGroups.find((candidate) => String(candidate.id) === groupId)
-          : null;
-        const peerId = raw.group
-          ? groupId
-          : String(raw.from) === String(user.id) ? raw.to : raw.from;
-        const peer = peerId
-          ? directoryUsers.find((candidate) => String(candidate.id) === String(peerId))
-          : null;
-        const type = groupId ? 'group' : 'dm';
-        const title = group?.name || getDisplayName(peer, i18n.language) || 'Chat';
-        return {
-          ...message,
-          id: messageId,
-          type,
-          conversationId: groupId || peerId,
-          conversationKey: groupId ? conversationKeyForGroup(groupId) : conversationKeyForUser(peerId),
-          title,
-          from: raw.from,
-          createdAt: raw.createdAt,
-          hasAttachment: Boolean(message.attachment),
-          attachmentFilename: message.attachment?.filename || null,
-          important: true,
-          isImportant: true,
-          importantAt: markedAtById.get(messageId) || null,
-        };
-      });
-      setImportantEntries(next);
-    } catch (err) {
-      setImportantEntries([]);
-      // Background prefetch — never surface raw validation noise like
-      // "Invalid user id" (happens when an older API treats "important" as a
-      // peer id). Chat itself still works.
-      const status = err.response?.status;
-      const msg = err.response?.data?.error || '';
-      if (status && status !== 400 && status !== 404 && msg !== 'Invalid user id') {
-        showToast(msg || "Couldn't load Important messages", 'error');
-      }
-    } finally {
-      setImportantLoading(false);
-    }
-  }, [getDisplayName, i18n.language, showToast, user?.id]);
-
-  useEffect(() => {
-    if (hasLocalKeyring) void loadImportantMessages();
-  }, [hasLocalKeyring, loadImportantMessages]);
-
-  useEffect(() => {
-    importantEntriesRef.current = importantEntries;
-  }, [importantEntries]);
-
-  const markMessageImportantIfNeeded = useCallback(async (rawMessage) => {
-    if (!rawMessage || !user?.id) return;
-    const messageId = String(rawMessage.id || rawMessage._id || '');
-    if (!messageId) return;
-    const alreadyImportant = importantEntriesRef.current.some((entry) => String(entry.id || entry._id) === messageId);
-    if (alreadyImportant) return;
-    const autoSource = getAutomaticImportantSource(rawMessage);
-    if (!autoSource) return;
-    if (getAutoImportantRemovedIds(user.id).includes(messageId)) return;
-
-    try {
-      await client.post(`/messages/${messageId}/important`);
-      setImportantEntries((current) => [{
-        ...rawMessage,
-        id: messageId,
-        title: rawMessage.title || 'Chat',
-        conversationId: rawMessage.conversationId || rawMessage.group || rawMessage.to || rawMessage.from,
-        type: rawMessage.group ? 'group' : 'dm',
-        hasAttachment: Boolean(rawMessage.attachment || rawMessage.attachments?.length),
-        attachmentFilename: rawMessage.attachment?.filename || rawMessage.attachments?.[0]?.filename || null,
-        text: rawMessage.text || rawMessage.content || null,
-        important: true,
-        isImportant: true,
-        importantAt: new Date().toISOString(),
-        importantSource: autoSource,
-      }, ...current]);
-    } catch (err) {
-      // Ignore duplicate or noisy auto-save failures; the backend already
-      // guards against repeated writes for the same message.
-    }
-  }, [user?.id]);
+  const {
+    pinnedIds,
+    setPinnedIds,
+    starredIds,
+    setStarredIds,
+    showStarredMessages,
+    setShowStarredMessages,
+    starredScope,
+    setStarredScope,
+    importantEntries,
+    importantLoading,
+    markMessageImportantIfNeeded,
+    handleStarMessage,
+    handleUnstarMessage,
+    handleImportantMessage,
+    handlePinMessage,
+    starredAndImportantEntries,
+  } = usePinnedAndStarredMessages({
+    user,
+    users,
+    groups,
+    selected,
+    selectedRef,
+    messages,
+    hasLocalKeyring,
+    showToast,
+    i18n,
+    decorate,
+    setGroups,
+    setSelected,
+    setExtrasTick,
+  });
 
   const recordActivityFromMessage = useCallback(
     (raw) => {
@@ -1249,202 +1213,6 @@ useEffect(() => {
     [user.id, bumpActivity],
   );
 
-  const loadDirectory = useCallback(() => {
-    if (!hasLocalKeyring) return;
-    setLoadingUsers(true);
-
-    const usersReq = client
-      .get("/users", { params: { limit: 20 } })
-      .then((res) => {
-        setUsers(res.data.data || []);
-        setUsersHasMore(Boolean(res.data.meta?.hasMore));
-        setUsersCursor(res.data.meta?.nextCursor || null);
-      })
-      .catch((err) =>
-        showToast(err.response?.data?.error || "Failed to load users", "error"),
-      );
-
-    const groupsReq = client
-      .get("/groups", { params: { limit: 20 } })
-      .then((res) => {
-        setGroups(res.data.data || []);
-        setGroupsHasMore(Boolean(res.data.meta?.hasMore));
-        setGroupsCursor(res.data.meta?.nextCursor || null);
-      })
-      .catch(() => setGroups([]));
-
-    Promise.allSettled([usersReq, groupsReq]).finally(() =>
-      setLoadingUsers(false),
-    );
-  }, [hasLocalKeyring]);
-  const loadMoreContacts = useCallback(() => {
-    if (!hasLocalKeyring) return;
-    if (usersHasMore) {
-      client
-        .get("/users", { params: { limit: 20, cursor: usersCursor } })
-        .then((res) => {
-          setUsers((prev) => [...prev, ...(res.data.data || [])]);
-          setUsersHasMore(Boolean(res.data.meta?.hasMore));
-          setUsersCursor(res.data.meta?.nextCursor || null);
-        })
-        .catch(() => { });
-    }
-    if (groupsHasMore) {
-      client
-        .get("/groups", { params: { limit: 20, cursor: groupsCursor } })
-        .then((res) => {
-          setGroups((prev) => [...prev, ...(res.data.data || [])]);
-          setGroupsHasMore(Boolean(res.data.meta?.hasMore));
-          setGroupsCursor(res.data.meta?.nextCursor || null);
-        })
-        .catch(() => { });
-    }
-  }, [hasLocalKeyring, usersHasMore, usersCursor, groupsHasMore, groupsCursor]);
-  const loadFriendDiscover = useCallback(
-    async (q) => {
-      setFriendCandidatesLoading(true);
-      try {
-        const { data } = await client.get("/users/discover", {
-          params: q?.trim() ? { q: q.trim() } : undefined,
-        });
-        setFriendCandidates(data.data || []);
-      } catch (err) {
-        showToast(
-          err.response?.data?.error || "Failed to load people",
-          "error",
-        );
-      } finally {
-        setFriendCandidatesLoading(false);
-      }
-    },
-    [showToast],
-  );
-
-  const loadFriendRequests = useCallback(async () => {
-    try {
-      const { data } = await client.get("/users/friend-requests");
-      setIncomingRequests(data.data?.incoming || []);
-      setOutgoingRequests(data.data?.outgoing || []);
-    } catch {
-      // non-fatal
-    }
-  }, []);
-
-  const loadMyFriends = useCallback(async () => {
-    setMyFriendsLoading(true);
-    try {
-      const { data } = await client.get("/users/friends");
-      setMyFriends(data.data || []);
-    } catch {
-      setMyFriends([]);
-    } finally {
-      setMyFriendsLoading(false);
-    }
-  }, []);
-
-  /** Instantly reflect an accepted friendship (socket or poll) — no page reload. */
-  const applyAcceptedFriendship = useCallback(
-    (friend, requestId) => {
-      const friendId = String(friend?.id || friend?._id || "");
-      if (!friendId) return;
-
-      const current = userRef.current;
-      if (current) {
-        const friends = Array.from(
-          new Set([...(current.friends || []).map(String), friendId]),
-        );
-        updateSessionUser({ ...current, friends });
-      }
-
-      setMyFriends((prev) => {
-        if (prev.some((f) => String(f.id || f._id) === friendId)) return prev;
-        return [
-          {
-            id: friendId,
-            displayName: friend.displayName,
-            username: friend.username,
-            hasAvatar: friend.hasAvatar,
-            ...friend,
-          },
-          ...prev,
-        ];
-      });
-
-      setOutgoingRequests((prev) =>
-        prev.filter((r) => {
-          if (requestId && String(r.id) === String(requestId)) return false;
-          return String(r.user?.id) !== friendId;
-        }),
-      );
-      setIncomingRequests((prev) =>
-        prev.filter((r) => {
-          if (requestId && String(r.id) === String(requestId)) return false;
-          return String(r.user?.id) !== friendId;
-        }),
-      );
-
-      setContactLookupResult((prev) =>
-        prev && String(prev.id) === friendId
-          ? { ...prev, requestStatus: "friends", requestId: null }
-          : prev,
-      );
-    },
-    [updateSessionUser],
-  );
-
-  const isFriendWith = useCallback(
-    (peerId) => {
-      const id = String(peerId || "");
-      if (!id) return false;
-      if ((user.friends || []).map(String).includes(id)) return true;
-      return myFriends.some((f) => String(f.id || f._id) === id);
-    },
-    [user?.friends, myFriends],
-  );
-
-  const handleLookupContact = useCallback(async () => {
-    const raw = contactQuery.trim();
-    setContactLookupError("");
-    setContactLookupResult(null);
-    if (!raw) {
-      setContactLookupError("Enter an email or phone number");
-      return;
-    }
-
-    const looksEmail = raw.includes("@");
-    const looksPhone = /^[\d\s+\-().]{7,}$/.test(raw);
-    if (!looksEmail && !looksPhone) {
-      setContactLookupError("Enter a valid email or phone number");
-      return;
-    }
-
-    setContactLookupLoading(true);
-    try {
-      const params = looksEmail
-        ? { email: raw.toLowerCase() }
-        : { phone: raw };
-      const { data } = await client.get("/users/lookup", { params });
-      if (!data.data) {
-        setContactLookupError(
-          looksEmail
-            ? "No verified account found for that email"
-            : "No account found for that phone number",
-        );
-        return;
-      }
-      setContactLookupResult(data.data);
-    } catch (err) {
-      setContactLookupError(
-        err.response?.data?.error || "Lookup failed — try again",
-      );
-    } finally {
-      setContactLookupLoading(false);
-    }
-  }, [contactQuery]);
-
-  useEffect(() => {
-    loadDirectory();
-  }, [loadDirectory]);
   useEffect(() => {
     const q = search.trim();
     if (!q || filter === "discover" || filter === "public" || filter === "friends") {
@@ -1471,132 +1239,6 @@ useEffect(() => {
     }, 300);
     return () => clearTimeout(searchDebounceRef.current);
   }, [search, filter]);
-  useEffect(() => {
-    if (!user?.id || !Array.isArray(user.mutedChats)) return;
-    const now = Date.now();
-    const serverMutedKeys = user.mutedChats
-      .filter((m) => m.expiresAt == null || new Date(m.expiresAt).getTime() > now)
-      .map((m) => String(m.conversationKey));
-    const serverSet = new Set(serverMutedKeys);
-
-    // Server is the source of truth once user.mutedChats has loaded — fully replace,
-    // not merge, so unmutes actually take effect (not just adds).
-    setMutedKeys(serverMutedKeys);
-
-    // Reconcile chatPrefs.js localStorage both ways too, since isChatMuted() elsewhere
-    // (socket handlers, sound-on-message checks) reads directly from localStorage, not from state.
-    const localSet = new Set(getMutedChatKeys(user.id).map(String));
-    serverSet.forEach((key) => {
-      if (!localSet.has(key)) toggleMuteChat(user.id, key);
-    });
-    localSet.forEach((key) => {
-      if (!serverSet.has(key)) toggleMuteChat(user.id, key);
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user?.id, user?.mutedChats]);
-  useEffect(() => {
-    if (!user?.id) return;
-    loadMyFriends();
-    loadFriendRequests();
-  }, [user?.id, loadMyFriends, loadFriendRequests]);
-
-  useEffect(() => {
-    if (!user?.id) return undefined;
-
-    let cancelled = false;
-    let inFlight = false;
-    let primed = false;
-    const knownFriendIds = new Set(
-      (userRef.current?.friends || []).map(String),
-    );
-
-    async function syncFriendState() {
-      if (cancelled || inFlight) return;
-      if (document.visibilityState === "hidden") return;
-
-      const socketConnected = Boolean(getSocket()?.connected);
-      const hasPending =
-        outgoingRequests.length > 0 || incomingRequests.length > 0;
-      // Keep polling while requests are pending (acceptances must show without
-      // reload). Also poll when Socket.IO is unavailable (e.g. Vercel API).
-      if (socketConnected && !hasPending) return;
-
-      inFlight = true;
-      try {
-        const [reqRes, friendsRes, meRes] = await Promise.all([
-          client.get("/users/friend-requests"),
-          client.get("/users/friends"),
-          client.get("/users/me").catch(() => null),
-        ]);
-        if (cancelled) return;
-
-        setIncomingRequests(reqRes.data?.data?.incoming || []);
-        setOutgoingRequests(reqRes.data?.data?.outgoing || []);
-
-        const friends = friendsRes.data?.data || [];
-        setMyFriends(friends);
-
-        const newlyAccepted = friends.filter((f) => {
-          const id = String(f.id || f._id);
-          return id && !knownFriendIds.has(id);
-        });
-        friends.forEach((f) => {
-          const id = String(f.id || f._id);
-          if (id) knownFriendIds.add(id);
-        });
-
-        if (meRes?.data?.data) {
-          updateSessionUser(meRes.data.data);
-        } else {
-          newlyAccepted.forEach((f) => applyAcceptedFriendship(f));
-        }
-
-        if (primed && newlyAccepted.length === 1 && hasPending) {
-          const name =
-            newlyAccepted[0].displayName ||
-            newlyAccepted[0].username ||
-            "Someone";
-          showToast(`${name} accepted your friend request`, "success");
-        }
-        primed = true;
-      } catch {
-        // non-fatal
-      } finally {
-        inFlight = false;
-      }
-    }
-
-    const hasPending =
-      outgoingRequests.length > 0 || incomingRequests.length > 0;
-    const intervalMs = hasPending ? 4000 : 12000;
-    const timer = window.setInterval(syncFriendState, intervalMs);
-    if (hasPending || !getSocket()?.connected) {
-      syncFriendState();
-    }
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-    // Intentionally omit myFriends / user.friends from deps — knownFriendIds
-    // is seeded once per effect run; length of pending queues drives restarts.
-  }, [
-    user?.id,
-    outgoingRequests.length,
-    incomingRequests.length,
-    updateSessionUser,
-    applyAcceptedFriendship,
-    showToast,
-  ]);
-
-  useEffect(() => {
-    if (filter === "all") {
-      loadMyFriends();
-    }
-    if (filter !== "friends") return;
-    loadFriendDiscover(search);
-    loadFriendRequests();
-    loadMyFriends();
-  }, [filter, search, loadFriendDiscover, loadFriendRequests, loadMyFriends]);
   // Socket routing and listener hooks
   useEffect(() => {
     if (!hasLocalKeyring) return;
@@ -1808,7 +1450,7 @@ useEffect(() => {
             ) {
               next.push({
                 ...confirmed,
-                text: m.text ?? confirmed.text,
+                text: preferConfirmedThreadText(m.text, confirmed.text, { mediaPending: Boolean(m._mediaPending) }),
                 _pending: undefined,
                 _status: undefined,
               });
@@ -1867,663 +1509,11 @@ useEffect(() => {
       }
     }
 
-    function handleDeleted(payload) {
-      const id = String(payload?.id || "");
-      if (!id) return;
-      setMessages((prev) => prev.filter((m) => String(m.id || m._id) !== id));
-    }
-
-    function handleExpired(payload) {
-      const id = String(payload?.id || "");
-      if (!id) return;
-      setMessages((prev) => prev.filter((m) => String(m.id || m._id) !== id));
-    }
-
-    function handleReaction(raw) {
-      const messageId = String(raw?.id || raw?._id || raw?.messageId || raw?.message?.id || raw?.message?._id || "");
-      if (!messageId) return;
-
-      // raw is a full-message snapshot, not a delta — diff its decrypted
-      // reactions against what we last rendered for this message to find
-      // out WHO just reacted and with WHAT emoji. raw.from is the message's
-      // original author, never the reactor — do not use it for actorId.
-      const decorated = decorate(raw);
-      const prevMessage = messagesRef.current.find(
-        (candidate) => String(candidate.id || candidate._id) === messageId,
-      );
-      const prevReactions = prevMessage?.reactions || [];
-      const nextReactions = decorated.reactions || [];
-      const changed = nextReactions.find((next) => {
-        const prev = prevReactions.find((p) => String(p.user) === String(next.user));
-        return !prev || prev.emoji !== next.emoji;
-      });
-
-      if (changed) {
-        const actorId = changed.user;
-        const actor = resolveActivityActor(actorId);
-        const groupId = typeof raw?.group === "object" ? raw.group.id || raw.group._id : raw?.group;
-        const groupName = typeof raw?.group === "object" ? raw.group.name : groupsRef.current.find((candidate) => String(candidate.id || candidate._id) === String(groupId))?.name;
-        const originalAuthor = resolveActivityActor(decorated.from);
-        activityStore.appendEvent({
-          id: `${messageId}:${actorId}:${changed.emoji || "clear"}:${Date.now()}`,
-          type: "reaction",
-          targetId: messageId,
-          messageId,
-          actorId,
-          actorName: actor.actorLabel,
-          actorIsCurrentUser: actor.actorIsCurrentUser,
-          emoji: changed.emoji,
-          groupId,
-          groupName,
-          preview: decorated.text,
-          originalAuthorLabel: originalAuthor.actorLabel,
-          originalAuthorIsCurrentUser: originalAuthor.actorIsCurrentUser,
-          reactedByYou: actor.actorIsCurrentUser,
-          conversationKey: groupId ? `group:${groupId}` : undefined,
-        });
-      }
-
-      if (changed && String(actorId) !== String(user.id)) {
-        const convKey = groupId
-          ? conversationKeyForGroup(groupId)
-          : conversationKeyForUser(String(decorated.from) === String(user.id) ? decorated.to : decorated.from);
-        const muted = isChatMuted(user.id, convKey);
-        if (!muted && shouldNotify(notifSettings, { kind: 'reaction' })) {
-          playNotificationSound(notifSettings);
-          showNotificationPopup(
-            {
-              title: 'QuantumChat',
-              body: `${actor.actorLabel} reacted ${changed.emoji || ''} to your message`,
-              tag: groupId ? `group:${groupId}` : `dm:${[String(user.id), String(actorId)].sort().join(':')}`,
-            },
-            notifSettings,
-            () =>
-              handleSelectConversation(
-                groupId ? { key: convKey, type: 'group', id: groupId } : { key: convKey, type: 'dm', id: actorId },
-              ),
-          );
-        }
-      }
-
-      if (!isCurrentConversation(raw)) return;
-      setMessages((prev) =>
-        prev.map((m) => (String(m.id || m._id) === messageId ? decorated : m)),
-      );
-    }
-
-    function handleEdited(raw) {
-      const id = String(raw?.id || raw?._id || "");
-      if (!id) return;
-      if (!isCurrentConversation(raw)) return;
-      setMessages((prev) =>
-        prev.map((m) => (String(m.id || m._id) === id ? decorate(raw) : m)),
-      );
-    }
-
-    function handleViewOnceOpened(raw) {
-      const id = String(raw?.id || raw?._id || "");
-      if (!id) return;
-      // Prefer updating by id if the message is already on screen — more
-      // reliable than conversation matching when from/to/group shapes differ.
-      setMessages((prev) => {
-        const idx = prev.findIndex((m) => String(m.id || m._id) === id);
-        if (idx === -1) return prev;
-        const current = prev[idx];
-        const decorated = decorate(raw);
-        const next = [...prev];
-        next[idx] = {
-          ...decorated,
-          // Keep decrypted text if the opened payload stripped envelopes.
-          text: decorated.text ?? current.text,
-        };
-        return next;
-      });
-    }
-
-    function handleGroupNew(payload = {}) {
-      const group = payload?.group || payload;
-      const groupId = group?.id || group?._id || payload?.groupId;
-      if (groupId) {
-        activityStore.appendEvent({
-          id: `new:${groupId}`,
-          type: "group",
-          targetId: groupId,
-          groupId,
-          groupName: group?.name || payload?.groupName,
-          action: "created",
-          actorId: payload?.actorId || payload?.createdBy,
-          ...resolveActivityActor(payload?.actorId || payload?.createdBy),
-        });
-      }
-      setGroups((prev) => {
-        if (!groupId) return prev;
-
-        if (prev.some((g) => String(g.id || g._id) === String(groupId))) {
-          return prev.map((g) =>
-            String(g.id || g._id) === String(groupId) ? group : g,
-          );
-        }
-        return [group, ...prev];
-      });
-    }
-    async function handleFriendRequestNew(payload = {}) {
-      const request = payload?.request || payload;
-      const requestId = request.id || request._id || request.requestId || payload.requestId;
-      const actorId = request.from || request.senderId || request.userId || payload.from;
-      const actor = resolveActivityActor(actorId);
-      if (requestId || actorId) {
-        activityStore.appendEvent({
-          id: requestId || `from:${actorId}`,
-          type: "friend_request",
-          actorId,
-          actorName: actor.actorLabel,
-          actorIsCurrentUser: actor.actorIsCurrentUser,
-          targetId: request.to || request.recipientId || user?.id,
-        });
-      }
-      loadFriendRequests();
-      showToast("New friend request", "info");
-    }
-    async function handleFriendRequestAccepted(payload = {}) {
-      const friend = payload?.friend;
-      const requestId = payload?.id || payload?.requestId;
-      if (friend) {
-        applyAcceptedFriendship(friend, requestId);
-        const name = friend.displayName || friend.username || "Someone";
-        showToast(`You're now friends with ${name}`, "success");
-      }
-
-      try {
-        const { data } = await client.get("/users/me");
-        if (data?.data) updateSessionUser(data.data);
-      } catch {
-        // non-fatal
-      }
-
-      loadDirectory();
-      loadFriendRequests();
-      loadMyFriends();
-      loadFriendDiscover(search);
-    }
-    async function handleFriendRemoved(payload = {}) {
-      const removedBy = payload?.by;
-      if (removedBy && userRef.current) {
-        const nextFriends = (userRef.current.friends || [])
-          .map(String)
-          .filter((id) => id !== String(removedBy));
-        updateSessionUser({ ...userRef.current, friends: nextFriends });
-        setMyFriends((prev) =>
-          prev.filter((f) => String(f.id || f._id) !== String(removedBy)),
-        );
-      }
-      try {
-        const { data } = await client.get("/users/me");
-        if (data?.data) updateSessionUser(data.data);
-      } catch {
-        // non-fatal
-      }
-      loadDirectory();
-      loadMyFriends();
-    }
-
-    function handleGroupUpdated(payload = {}) {
-      const group = payload?.group || payload;
-      const groupId = group.id || group._id || payload.groupId;
-      if (!groupId) return;
-      activityStore.appendEvent({
-        id: `updated:${groupId}`,
-        type: "group",
-        targetId: groupId,
-        groupId,
-        groupName: group.name || payload.groupName,
-        action: "updated",
-        actorId: payload.actorId || payload.updatedBy,
-        ...resolveActivityActor(payload.actorId || payload.updatedBy),
-      });
-      setGroups((prev) => {
-        if (prev.some((g) => String(g.id) === String(groupId))) {
-          return prev.map((g) =>
-            String(g.id) === String(groupId) ? group : g,
-          );
-        }
-        return [group, ...prev];
-      });
-      const current = selectedRef.current;
-      if (
-        current?.type === "group" &&
-        String(current.id) === String(groupId)
-      ) {
-        const memberCount = (group.members || []).length;
-        const desc = (group.description || "").trim();
-        setSelected((prev) =>
-          prev
-            ? {
-              ...prev,
-              group,
-              title: group.name || prev.title,
-              subtitle: desc
-                ? desc.slice(0, 60) + (desc.length > 60 ? "…" : "")
-                : `${memberCount} member${memberCount === 1 ? "" : "s"}`,
-            }
-            : prev,
-        );
-        setPinnedIds((group.pinnedMessageIds || []).map(String));
-      }
-    }
-
-    function handleGroupDeleted(payload = {}) {
-      const id = payload.id || payload._id || payload.groupId || payload.group?.id || payload.group?._id;
-      if (!id) return;
-      activityStore.appendEvent({
-        id: `deleted:${id}`,
-        type: "group",
-        targetId: id,
-        groupId: id,
-        groupName: payload.groupName || payload.group?.name,
-        action: "deleted",
-        actorId: payload.actorId || payload.deletedBy,
-        ...resolveActivityActor(payload.actorId || payload.deletedBy),
-      });
-      setGroups((prev) => prev.filter((g) => String(g.id) !== String(id)));
-      const current = selectedRef.current;
-      if (current?.type === "group" && String(current.id) === String(id)) {
-        setSelected(null);
-        setMessages([]);
-        setShowGroupSettings(false);
-        setShowCommandCenter(false);
-        if (location.pathname !== "/chat") navigate("/chat");
-      }
-    }
-
-    function handlePollUpdate(raw) {
-      const id = String(raw?.id || raw?._id || "");
-      if (!id) return;
-      if (!isCurrentConversation(raw)) return;
-      setMessages((prev) =>
-        prev.map((m) =>
-          String(m.id || m._id) === id
-            ? { ...decorate(raw), pollVotes: raw.pollVotes || [] }
-            : m,
-        ),
-      );
-    }
-
-     function handleMentionNew(payload = {}) {
-      const message = payload?.message || payload;
-      const from = message.from || message.senderId || payload.from;
-      const messageId = message.id || message._id || message.messageId || payload.messageId;
-      const groupId = message.groupId || message.group || payload.groupId;
-      const mentionId = messageId || (from && groupId ? `${from}:${groupId}` : null);
-      if (mentionId) {
-        activityStore.appendEvent({
-          id: mentionId,
-          type: "mention",
-          actorId: from,
-          targetId: groupId || message.to || payload.to,
-          messageId,
-          conversationKey: groupId ? `group:${groupId}` : undefined,
-        });
-      }
-
-      const isSelf = String(from) === String(user.id);
-      const username = isSelf
-        ? user.username
-        : users.find((u) => String(u.id) === String(from))?.username;
-      const groupName = groupId
-        ? groups.find((g) => String(g.id) === String(groupId))?.name
-        : null;
-
-      const convKey = groupId ? conversationKeyForGroup(groupId) : null;
-      const muted = convKey ? isChatMuted(user.id, convKey) : false;
-      const current = selectedRef.current;
-      const isCurrent =
-        groupId && current?.type === "group" && String(current.id) === String(groupId);
-
-      // Mentions always alert unless the chat itself is muted — a mention
-      // is a direct call-out, so it shouldn't be silently downgraded to a
-      // toast the way a routine group message can be.
-      if (isSelf || muted) {
-        showToast(`${username || "Someone"} mentioned you`);
-        return;
-      }
-
-      playNotificationSound(notifSettings);
-      showNotificationPopup(
-        {
-          title: groupName || "Group mention",
-          body: `${username || "Someone"} mentioned you`,
-          tag: groupId ? `group:${groupId}` : undefined,
-          data: {
-            url: groupId ? `/chat/g/${groupId}` : undefined,
-            kind: "group",
-          },
-        },
-        notifSettings,
-        () => {
-          if (groupId) {
-            handleSelectConversation({ key: convKey, type: "group", id: groupId });
-          }
-          if (messageId) handleSearchResult(messageId);
-        },
-      );
-
-      if (!isCurrent) {
-        showToast(`${username || "Someone"} mentioned you in ${groupName || "a group"}`);
-      }
-    }
-
-    function handleTypingStart({ from, groupId } = {}) {
-      console.log('[TYPING-DBG] typing:start received', { from, groupId, currentSelected: selectedRef.current?.id, currentType: selectedRef.current?.type });
-      const current = selectedRef.current;
-      if (!current) { console.log('[TYPING-DBG] no current selected, ignoring'); return; }
-      if (
-        groupId &&
-        current.type === "group" &&
-        String(groupId) === String(current.id)
-      ) {
-        if (String(from) === String(user.id)) { console.log('[TYPING-DBG] own typing, ignoring'); return; }
-        const activeGroup = groups.find((g) => String(g.id) === String(current.id)) || current.group;
-        let u = users.find((u) => String(u.id) === String(from));
-        console.log('[TYPING-DBG] resolved user from users array:', u);
-        if (!u) {
-          const member = (activeGroup?.members || []).find(
-            (m) => String(m.user?._id || m.user?.id || m.id || m._id) === String(from)
-          );
-          u = member?.user || member;
-          console.log('[TYPING-DBG] resolved user from group members:', u);
-        }
-        const name = u?.username || "Someone";
-        const hasAvatar = u?.hasAvatar || !!u?.avatarPath;
-        const userObj = { id: from, username: name, hasAvatar };
-        console.log('[TYPING-DBG] setting groupTypingUsers with', userObj);
-
-        setGroupTypingUsers((prev) => {
-          const filtered = prev.filter(p => String(p.id) !== String(from));
-          return [...filtered, userObj].slice(-5);
-        });
-        clearTimeout(typingPeerTimeoutRef.current);
-        typingPeerTimeoutRef.current = setTimeout(
-          () => setGroupTypingUsers([]),
-          3000,
-        );
-        return;
-      }
-      console.log('[TYPING-DBG] group condition not matched — groupId:', groupId, 'current.type:', current?.type, 'current.id:', current?.id);
-      if (current.type !== "dm") return;
-      if (String(from) !== String(current.id)) return;
-      setPeerTyping(true);
-      clearTimeout(typingPeerTimeoutRef.current);
-      typingPeerTimeoutRef.current = setTimeout(
-        () => setPeerTyping(false),
-        4000,
-      );
-    }
-
-    function handleTypingStop({ from, groupId } = {}) {
-      const current = selectedRef.current;
-      if (!current) return;
-      if (
-        groupId &&
-        current.type === "group" &&
-        String(groupId) === String(current.id)
-      ) {
-        setGroupTypingUsers((prev) => prev.filter((u) => String(u.id) !== String(from)));
-        return;
-      }
-      if (current.type !== "dm") return;
-      if (String(from) !== String(current.id)) return;
-      setPeerTyping(false);
-    }
-
-    function handlePresenceSnapshot({ onlineUserIds: ids } = {}) {
-      setOnlineUserIds(new Set((ids || []).map(String)));
-    }
-
-    function handlePresenceUpdate({ userId, online, lastLoginAt } = {}) {
-      const id = String(userId);
-      setOnlineUserIds((prev) => {
-        const next = new Set(prev);
-        if (online) next.add(id);
-        else next.delete(id);
-        return next;
-      });
-      if (lastLoginAt) {
-        setUsers((prev) =>
-          prev.map((u) =>
-            String(u.id) === id ? { ...u, lastLoginAt } : u,
-          ),
-        );
-        setSelected((cur) => {
-          if (!cur || cur.type !== "dm" || String(cur.id) !== id) return cur;
-          if (cur.peer?.lastLoginAt === lastLoginAt) return cur;
-          return {
-            ...cur,
-            peer: { ...(cur.peer || {}), lastLoginAt },
-          };
-        });
-      }
-    }
-
-    function handleMessageStatus(payload) {
-      if (!payload) return;
-      if (payload.groupId && Array.isArray(payload.messageIds)) {
-        const idSet = new Set(payload.messageIds.map(String));
-        const rUid = String(payload.userId || "");
-        const readAt = payload.readAt ? new Date(payload.readAt).toISOString() : null;
-        const deliveredAt = (payload.deliveredAt || payload.readAt)
-          ? new Date(payload.deliveredAt || payload.readAt).toISOString()
-          : null;
-        setMessages((prev) =>
-          prev.map((m) => {
-            const mid = String(m.id || m._id);
-            if (!idSet.has(mid)) return m;
-            const existingRead = (m.readBy || []).filter((r) => String(r.user) !== rUid);
-            const existingDelivered = (m.deliveredTo || []).filter((d) => String(d.user) !== rUid);
-            const nextDelivered = deliveredAt
-              ? [...existingDelivered, { user: rUid, at: deliveredAt }]
-              : m.deliveredTo || [];
-            const nextRead = readAt
-              ? [...existingRead, { user: rUid, at: readAt }]
-              : m.readBy || [];
-            return {
-              ...m,
-              deliveredTo: nextDelivered,
-              readBy: nextRead,
-            };
-          }),
-        );
-        return;
-      }
-      if (payload.bulk && payload.conversationWith) {
-        const peer = String(payload.conversationWith);
-        setMessages((prev) =>
-          prev.map((m) =>
-            String(m.to) === peer || String(m.from) === peer
-              ? {
-                ...m,
-                deliveredAt: m.deliveredAt || payload.readAt,
-                readAt:
-                  String(m.from) === String(user.id)
-                    ? payload.readAt || m.readAt
-                    : m.readAt,
-              }
-              : m,
-          ),
-        );
-        return;
-      }
-      const id = String(payload.id || "");
-      if (!id) return;
-      setMessages((prev) =>
-        prev.map((m) =>
-          String(m.id || m._id) === id
-            ? {
-              ...m,
-              deliveredAt: payload.deliveredAt || m.deliveredAt,
-              readAt: payload.readAt || m.readAt,
-              _status: undefined,
-            }
-            : m,
-        ),
-      );
-    }
-
-    function handleChatCleared(payload = {}) {
-      // Multi-device sync: another of this user's sessions cleared a chat.
-      // Scoped clears (photos only, etc.) must NOT wipe the whole thread —
-      // only drop matching messages. Full "all" clears empty the view.
-      const current = selectedRef.current;
-      if (!current) return;
-      const matchesGroup =
-        payload.groupId &&
-        current.type === "group" &&
-        String(current.id) === String(payload.groupId);
-      const matchesDm =
-        payload.peerId &&
-        current.type === "dm" &&
-        String(current.id) === String(payload.peerId);
-      if (!matchesGroup && !matchesDm) return;
-
-      const scopes = Array.isArray(payload.scopes) && payload.scopes.length
-        ? payload.scopes.map(String)
-        : ["all"];
-      if (scopes.includes("all")) {
-        setMessages([]);
-        return;
-      }
-
-      const clearedAtMs = payload.clearedAt
-        ? new Date(payload.clearedAt).getTime()
-        : Date.now();
-
-      setMessages((prev) =>
-        prev.filter((m) => {
-          const createdMs = new Date(m.createdAt || 0).getTime();
-          if (createdMs > clearedAtMs) return true;
-          return !scopes.some((scope) => messageMatchesClearScope(m, scope));
-        }),
-      );
-    }
-
-    function handleChatClearUndone(payload = {}) {
-      // Another of this user's sessions undid a clear — re-fetch if we're
-      // looking at that conversation so hidden messages come back.
-      const current = selectedRef.current;
-      if (!current) return;
-      const matchesGroup =
-        payload.groupId &&
-        current.type === "group" &&
-        String(current.id) === String(payload.groupId);
-      const matchesDm =
-        payload.peerId &&
-        current.type === "dm" &&
-        String(current.id) === String(payload.peerId);
-      if (!matchesGroup && !matchesDm) return;
-
-      const endpoint =
-        current.type === "group"
-          ? `/groups/${current.id}/messages`
-          : `/messages/${current.id}`;
-      setLoadingMessages(true);
-      client
-        .get(endpoint, { params: { limit: 80, markRead: 0 } })
-        .then((res) => {
-          setMessages((res.data.data || []).map((raw) => decorateRef.current(raw)));
-        })
-        .catch(() => {})
-        .finally(() => setLoadingMessages(false));
-    }
-
-    function handleUserStatus(payload = {}) {
-      const { userId: statusUserId } = payload;
-      if (!statusUserId) return;
-      const nextStatus = payload.statusText || "";
-      // Reflect the new custom status in the contact list...
-      setUsers((prev) =>
-        prev.map((u) =>
-          String(u.id) === String(statusUserId) ? { ...u, statusText: nextStatus } : u,
-        ),
-      );
-      // ...the currently-open DM (so the header/peer view updates live)...
-      setSelected((prev) =>
-        prev && prev.type === "dm" && String(prev.id) === String(statusUserId)
-          ? {
-            ...prev,
-            statusText: nextStatus,
-            peer: prev.peer ? { ...prev.peer, statusText: nextStatus } : prev.peer,
-          }
-          : prev,
-      );
-      // ...and our own session (when this is our own status echoed back to us).
-      if (String(statusUserId) === String(user.id)) {
-        updateSessionUser({ ...userRef.current, statusText: nextStatus });
-      }
-    }
-
     socket.on("message:new", handleIncoming);
-    socket.on("message:deleted", handleDeleted);
-    socket.on("message:expired", handleExpired);
-    socket.on("message:reaction", handleReaction);
-    socket.on("message:edited", handleEdited);
-    socket.on("message:view-once-opened", handleViewOnceOpened);
-    socket.on("group:new", handleGroupNew);
-    socket.on("group:updated", handleGroupUpdated);
-    socket.on("group:deleted", handleGroupDeleted);
-    socket.on("message:poll", handlePollUpdate);
-    socket.on("mention:new", handleMentionNew);
-    socket.on("typing:start", handleTypingStart);
-    socket.on("typing:stop", handleTypingStop);
-    socket.on("presence:snapshot", handlePresenceSnapshot);
-    socket.on("presence:update", handlePresenceUpdate);
-    socket.on("message:status", handleMessageStatus);
-    socket.on("friend:request:new", handleFriendRequestNew);
-    socket.on("friend:request:accepted", handleFriendRequestAccepted);
-    socket.on("friend:removed", handleFriendRemoved);
-    socket.on("chat:cleared", handleChatCleared);
-    socket.on("chat:clear-undone", handleChatClearUndone);
-    socket.on("user:status", handleUserStatus);
-
-    // Auth may connect the socket before Chat mounts, so the initial
-    // presence:snapshot is easy to miss. Re-request whenever listeners attach
-    // and again after every reconnect.
-  function requestPresence() {
-  if (socket.connected) {
-    socket.emit("presence:request");
-    syncTypingPrivacy();
-  }
-  }
-  socket.on("connect", requestPresence);
-  requestPresence();
 
     return () => {
       socket.off("message:new", handleIncoming);
-      socket.off("message:deleted", handleDeleted);
-      socket.off("message:expired", handleExpired);
-      socket.off("message:reaction", handleReaction);
-      socket.off("message:edited", handleEdited);
-      socket.off("message:view-once-opened", handleViewOnceOpened);
-      socket.off("group:new", handleGroupNew);
-      socket.off("group:updated", handleGroupUpdated);
-      socket.off("group:deleted", handleGroupDeleted);
-      socket.off("message:poll", handlePollUpdate);
-      socket.off("mention:new", handleMentionNew);
-      socket.off("typing:start", handleTypingStart);
-      socket.off("typing:stop", handleTypingStop);
-      socket.off("presence:snapshot", handlePresenceSnapshot);
-      socket.off("presence:update", handlePresenceUpdate);
-      socket.off("message:status", handleMessageStatus);
-      socket.off("friend:request:new", handleFriendRequestNew);
-      socket.off("friend:request:accepted", handleFriendRequestAccepted);
-      socket.off("friend:removed", handleFriendRemoved);
-      socket.off("chat:cleared", handleChatCleared);
-      socket.off("chat:clear-undone", handleChatClearUndone);
-      socket.off("user:status", handleUserStatus);
-  socket.off("connect", requestPresence);
-  stopTyping({ emit: false });
-  clearTimeout(typingPeerTimeoutRef.current);
-  setPeerTyping(false);
-  setGroupTypingUsers([]);
-  };
+    };
   }, [
     hasLocalKeyring,
     user,
@@ -2535,14 +1525,52 @@ useEffect(() => {
     bumpActivity,
     showToast,
     notifSettings,
+  ]);
+
+  // Socket listener hook for presence, typing, receipts, reactions, groups, and friendship events
+  useChatSocketEvents({
+    socket: getSocket(),
+    hasLocalKeyring,
+    user,
+    userRef,
+    users,
+    setUsers,
+    groups,
+    setGroups,
+    groupsRef,
+    selectedRef,
+    setSelected,
+    setMessages,
+    messagesRef,
+    decorate,
+    setOnlineUserIds,
+    setPeerTyping,
+    setGroupTypingUsers,
+    typingPeerTimeoutRef,
+    stopTyping,
+    syncTypingPrivacy,
+    setPinnedIds,
+    setShowGroupSettings,
+    setShowCommandCenter,
+    setUnreadNotificationCount,
+    setLoadingMessages,
     applyAcceptedFriendship,
-    updateSessionUser,
     loadDirectory,
     loadFriendRequests,
     loadMyFriends,
     loadFriendDiscover,
+    setMyFriends,
+    updateSessionUser,
     search,
-  ]);
+    showToast,
+    notifSettings,
+    resolveActivityActor,
+    handleSelectConversation,
+    handleSearchResult,
+    navigate,
+    location,
+  });
+
 
   // Production (Vercel API) has no Socket.IO — poll REST presence/typing instead.
   useEffect(() => {
@@ -2676,6 +1704,10 @@ useEffect(() => {
   const selectedKey = selected?.key;
   const selectedType = selected?.type;
   const selectedId = selected?.id;
+  const threadBlockedByLock =
+        Boolean(selectedKey) &&
+        !chatLockUnlocked &&
+        (!chatLockReady || isChatLocked(selectedKey));
   const decorateRef = useRef(decorate);
   decorateRef.current = decorate;
   const recordActivityRef = useRef(recordActivityFromMessage);
@@ -2689,7 +1721,14 @@ useEffect(() => {
   const loadedThreadKeyRef = useRef(null);
 
   useEffect(() => {
-    if (!selectedKey || !selectedId || !hasLocalKeyring) return undefined;
+    if (threadBlockedByLock) {
+      loadedThreadKeyRef.current = null;
+      setMessages([]);
+    }
+  }, [threadBlockedByLock]);
+
+  useEffect(() => {
+    if (!selectedKey || !selectedId || !hasLocalKeyring || threadBlockedByLock) return undefined;
 
     const threadKey = selectedKey;
     const threadType = selectedType;
@@ -2772,7 +1811,7 @@ useEffect(() => {
     // thread. The request already carries the correct x-vault-token via
     // client.js's interceptor, so the server swaps between the decoy and
     // real message set automatically — this just re-triggers that fetch.
-  }, [selectedKey, selectedType, selectedId, hasLocalKeyring, user.id, vaultUnlocked]);
+  }, [selectedKey, selectedType, selectedId, hasLocalKeyring, user.id, vaultUnlocked, threadBlockedByLock]);
   // Vault: only fetch/show "has decoy messages" when actually unlocked and
   // viewing a vaulted DM — this call itself 403s if locked (server-enforced),
   // but skip it entirely rather than firing a doomed request every switch.
@@ -2805,7 +1844,7 @@ useEffect(() => {
   // when a socket is connected — view-once / receipt updates can be missed
   // if signaling is on a separate host from the message API.
   useEffect(() => {
-    if (!selectedKey || !selectedId || !hasLocalKeyring) return undefined;
+   if (!selectedKey || !selectedId || !hasLocalKeyring || threadBlockedByLock) return undefined;
 
     let cancelled = false;
     let inFlight = false;
@@ -2929,7 +1968,7 @@ useEffect(() => {
       window.removeEventListener("focus", syncOpenConversation);
       document.removeEventListener("visibilitychange", syncWhenVisible);
     };
-  }, [selectedKey, selectedType, selectedId, hasLocalKeyring, user.id]);
+  }, [selectedKey, selectedType, selectedId, hasLocalKeyring, user.id, threadBlockedByLock]);
   // Global inbox sync: covers every conversation, not just the one that's
   // open. syncOpenConversation above only refreshes the active thread, so
   // without this, other chats never update (no unread badge, no sidebar
@@ -3188,6 +2227,19 @@ useEffect(() => {
     return map;
   }, [users, groups, user, i18n.language]);
 
+  const userById = useMemo(() => {
+    const map = new Map();
+    for (const u of users) map.set(String(u.id), u);
+    for (const g of groups) {
+      for (const m of g.members || []) {
+        const id = memberId(m);
+        const memberUser = m.user || m;
+        if (memberUser && typeof memberUser === "object") map.set(id, memberUser);
+      }
+    }
+    return map;
+  }, [users, groups]);
+
   const selfPeer = useMemo(() => {
     if (!user?.id) return null;
     return {
@@ -3285,7 +2337,7 @@ useEffect(() => {
     },
   });
 
-  const conversations = useMemo(() => {
+  const conversationItems = useMemo(() => {
     const q = search.trim().toLowerCase();
     const hidden = new Set(hiddenChatIds);
     const items = [];
@@ -3430,15 +2482,6 @@ useEffect(() => {
       ) {
         return false;
       }
-      if (filter === "archived") {
-        if (!archived.has(String(c.key))) return false;
-      } else if (archived.has(String(c.key))) {
-        return false;
-      }
-      if (filter === "discover") return false;
-      if (filter === "groups" && c.type !== "group") return false;
-      if (filter === "unread" && !c.unread) return false;
-      if (!searchResults && q && !(c.searchText || "").includes(q)) return false;
       return true;
     });
   }, [
@@ -3448,7 +2491,6 @@ useEffect(() => {
     user.username,
     selfPeer,
     search,
-    filter,
     activityTick,
     hiddenChatIds,
     mutedKeys,
@@ -3461,6 +2503,29 @@ useEffect(() => {
     selected,
     messages,
   ]);
+
+  const conversations = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    const archived = new Set(archivedKeys.map(String));
+    const folderKeys = activeFolder
+      ? new Set(activeFolder.conversationKeys.map(String))
+      : null;
+    return conversationItems.filter((c) => {
+      if (folderKeys) {
+        // A folder shows every chat the user put in it, archived or not.
+        if (!folderKeys.has(String(c.key))) return false;
+      } else if (filter === "archived") {
+        if (!archived.has(String(c.key))) return false;
+      } else if (archived.has(String(c.key))) {
+        return false;
+      }
+      if (filter === "discover") return false;
+      if (filter === "groups" && c.type !== "group") return false;
+      if (filter === "unread" && !c.unread) return false;
+      if (!searchResults && q && !(c.searchText || "").includes(q)) return false;
+      return true;
+    });
+  }, [conversationItems, search, filter, archivedKeys, activeFolder, searchResults]);
 
   // Update browser tab unread count prefix (must run after conversations is defined)
   useEffect(() => {
@@ -3615,10 +2680,18 @@ useEffect(() => {
   function handleBackToList() {
     applyConversationSelection(null, { syncUrl: true });
   }
-  async function handleMarkAllRead() {
+    async function handleMarkAllRead() {
+    if (unreadNotificationCount > 0) {
+      markAllNotificationsRead()
+        .then(() => setUnreadNotificationCount(0))
+        .catch(() => {});
+    }
+
     const unreadConvos = conversations.filter((c) => c.unread);
     if (!unreadConvos.length) {
-      showToast("No unread conversations", "info");
+      if (unreadNotificationCount === 0) {
+        showToast("No unread conversations", "info");
+      }
       return;
     }
 
@@ -3726,167 +2799,6 @@ useEffect(() => {
         "error",
       );
       throw err;
-    }
-  }
-  async function handleSendFriendRequest(userId) {
-    try {
-      const { data } = await client.post("/users/friend-requests", { to: userId });
-      if (data?.data?.status === "accepted") {
-        if (data?.data?.me) updateSessionUser(data.data.me);
-        showToast("You are now friends", "success");
-        loadMyFriends();
-      } else {
-        showToast("Friend request sent", "success");
-      }
-      loadFriendDiscover(search);
-      loadFriendRequests();
-      setContactLookupResult((prev) =>
-        prev && String(prev.id) === String(userId)
-          ? {
-            ...prev,
-            requestStatus:
-              data?.data?.status === "accepted" ? "friends" : "pending_sent",
-            requestId: data?.data?.id || data?.data?.requestId || prev.requestId,
-          }
-          : prev,
-      );
-    } catch (err) {
-      showToast(err.response?.data?.error || "Failed to send request", "error");
-    }
-  }
-
-  function handleNotFriendsError(err, fallbackRecipientId) {
-    const errData = err?.response?.data || err?.data || err;
-    if (errData?.code === 'NOT_FRIENDS') {
-      const targetId = errData.recipientId || fallbackRecipientId;
-      showToast(
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-          <span>Unable to send message — you're not friends with this user. Add them as a friend first.</span>
-          {targetId && (
-            <button
-              type="button"
-              style={{
-                alignSelf: 'flex-start',
-                padding: '4px 10px',
-                fontSize: '0.8rem',
-                fontWeight: '600',
-                borderRadius: '4px',
-                border: '1px solid var(--border-subtle)',
-                background: 'var(--bg-elevated)',
-                color: 'var(--text-primary)',
-                cursor: 'pointer',
-                marginTop: '2px',
-              }}
-              onClick={(e) => {
-                e.stopPropagation();
-                handleSendFriendRequest(targetId);
-              }}
-            >
-              Add Friend
-            </button>
-          )}
-        </div>,
-        "error",
-        6000
-      );
-      return true;
-    }
-    return false;
-  }
-
-  async function handleCancelFriendRequest(requestId) {
-    try {
-      await client.delete(`/users/friend-requests/${requestId}`);
-      setOutgoingRequests((prev) =>
-        prev.filter((r) => String(r.id) !== String(requestId)),
-      );
-      loadFriendDiscover(search);
-      loadFriendRequests();
-      setContactLookupResult((prev) =>
-        prev && String(prev.requestId) === String(requestId)
-          ? { ...prev, requestStatus: "none", requestId: null }
-          : prev,
-      );
-      showToast("Friend request cancelled", "success");
-    } catch (err) {
-      showToast(
-        err.response?.data?.error || "Failed to cancel request",
-        "error",
-      );
-    }
-  }
-
-  async function executeAcceptFriendRequest(requestId) {
-    try {
-      const pending = incomingRequests.find(
-        (r) => String(r.id) === String(requestId),
-      );
-      const { data } = await client.post(
-        `/users/friend-requests/${requestId}/accept`,
-      );
-      if (pending?.user) {
-        applyAcceptedFriendship(pending.user, requestId);
-      }
-      if (data?.data?.me) {
-        updateSessionUser(data.data.me);
-      } else {
-        try {
-          const meRes = await client.get("/users/me");
-          if (meRes.data?.data) updateSessionUser(meRes.data.data);
-        } catch {
-          // non-fatal
-        }
-      }
-      showToast("Friend request accepted", "success");
-      loadDirectory();
-      loadFriendDiscover(search);
-      loadMyFriends();
-    } catch (err) {
-      showToast(
-        err.response?.data?.error || "Failed to accept request",
-        "error",
-      );
-    }
-  }
-
-  function handleAcceptFriendRequest(requestId) {
-    const pending = incomingRequests.find(
-      (r) => String(r.id) === String(requestId),
-    );
-    if (pending?.moderationWarning?.reportedByMultiple) {
-      const reasonText = pending.moderationWarning.commonReason
-        ? ` The most common reason given is "${pending.moderationWarning.commonReason.replace(/_/g, ' ')}".`
-        : '';
-      setConfirmDialog({
-        type: "accept-with-warning",
-        requestId,
-        title: "Safety warning",
-        message: `${pending.user?.displayName || pending.user?.username || 'This account'} has been reported by multiple people.${reasonText} Do you still want to accept this friend request?`,
-        confirmLabel: "Accept anyway",
-        danger: true,
-      });
-      return;
-    }
-    executeAcceptFriendRequest(requestId);
-  }
-
-  async function handleDeclineFriendRequest(requestId) {
-    try {
-      await client.post(`/users/friend-requests/${requestId}/decline`);
-      setIncomingRequests((prev) =>
-        prev.filter((r) => String(r.id) !== String(requestId)),
-      );
-      loadFriendDiscover(search);
-      setContactLookupResult((prev) =>
-        prev && String(prev.requestId) === String(requestId)
-          ? { ...prev, requestStatus: "none", requestId: null }
-          : prev,
-      );
-    } catch (err) {
-      showToast(
-        err.response?.data?.error || "Failed to decline request",
-        "error",
-      );
     }
   }
   function sealGroupEnvelopes(plaintext, group) {
@@ -4082,6 +2994,22 @@ useEffect(() => {
       }
     }
   }
+  async function applyChatLock(key) {
+        try {
+          await lockChat(key);
+          setPendingLockKey(null);
+          showToast("Chat locked", "success");
+          if (selected && String(selected.key) === String(key)) applyConversationSelection(null);
+        } catch (err) {
+          showToast(err.response?.data?.error || "Failed to lock chat", "error");
+        }
+      }
+      function handleToggleChatLock(c) {
+        if (!c?.key || c.isSelfChat) return;
+        if (isChatLocked(c.key)) { setRemoveLockKey(c.key); return; }
+        if (!chatLockEnabled) { setPendingLockKey(c.key); setShowChatLockSetup(true); return; }
+        applyChatLock(c.key);
+      }
   async function handleToggleVault(peerId) {
     if (isPeerVaulted(peerId)) {
       try {
@@ -4115,197 +3043,35 @@ useEffect(() => {
     }
   }
 
-  function handleBlockUser(u) {
-    setConfirmDialog({
-      type: "block",
-      user: u,
-      title: `Block ${u.username}?`,
-      message:
-        "They’ll be removed from your list and you won’t be able to message each other. Chat history is kept.",
-      confirmLabel: "Block",
-      danger: true,
-    });
-  }
-
-  async function executeBlockUser(u) {
-    try {
-      setConfirmBusy(true);
-      const { data } = await client.post(`/users/${u.id}/block`);
-      updateSessionUser(data.data);
-      setUsers((prev) =>
-        prev.filter((peer) => String(peer.id) !== String(u.id)),
-      );
-      setHiddenChatIds(hideChat(user.id, u.id));
-      if (selected?.type === "dm" && String(selected.id) === String(u.id)) {
-        applyConversationSelection(null);
-      }
-      setError("");
-      setConfirmDialog(null);
-    } catch (err) {
-      showToast(err.response?.data?.error || "Failed to block user", "error");
-      setConfirmDialog(null);
-    } finally {
-      setConfirmBusy(false);
-    }
-  }
-  function handleClearChat() {
-    if (!selected) return;
-    setClearChatOpen(true);
-  }
-
-  async function executeClearChatScoped(scopes) {
-    if (!selected) return;
-    const type = selected.type;
-    const id = selected.id;
-    const conversationKey = selected.key;
-    const clearingStarred = scopes.includes("starred");
-    const CONTENT_SCOPES = ["photo", "video", "voice", "document", "text"];
-    let serverScopes = scopes.filter((s) => s !== "starred");
-    // Selecting every content type is a full clear — use the single 'all'
-    // watermark so we don't leave five overlapping scoped entries.
-    if (CONTENT_SCOPES.every((k) => serverScopes.includes(k))) {
-      serverScopes = ["all"];
-    }
-
-    // Snapshot for Undo (toast stays up ~8s).
-    const previousClearedEntries = (user.clearedConversations || [])
-      .filter((c) => c && c.conversationKey === conversationKey)
-      .map((c) => ({
-        conversationKey: c.conversationKey,
-        scope: c.scope || "all",
-        clearedAt: c.clearedAt,
-      }));
-    const previousMessages =
-      selectedRef.current &&
-      selectedRef.current.type === type &&
-      String(selectedRef.current.id) === String(id)
-        ? messages
-        : null;
-    const previousStarredEntries = clearingStarred
-      ? getStarredEntries(user.id)
-      : null;
-
-    try {
-      setClearChatBusy(true);
-
-      if (serverScopes.length) {
-        const payload =
-          type === "group"
-            ? { groupId: id, scopes: serverScopes }
-            : { peerId: id, scopes: serverScopes };
-        const { data } = await client.post("/users/me/clear-chat", payload);
-        // Server confirmed — persist the updated watermarks to the session.
-        // No optimistic clear: if the request had failed, existing messages
-        // stay intact.
-        if (data?.data) updateSessionUser(data.data);
-      }
-
-      if (clearingStarred) {
-        setStarredIds(clearAllStarred(user.id));
-      }
-
-      const current = selectedRef.current;
-      if (current && current.type === type && String(current.id) === String(id)) {
-        if (serverScopes.includes("all")) {
-          setMessages([]);
-        } else if (serverScopes.length) {
-          // Re-fetch rather than blanking outright — a scoped clear (e.g. just
-          // photos) should still leave the remaining messages visible.
-          setLoadingMessages(true);
-          const endpoint = type === "group" ? `/groups/${id}/messages` : `/messages/${id}`;
-          try {
-            const res = await client.get(endpoint, { params: { limit: 80, markRead: 0 } });
-            setMessages((res.data.data || []).map((raw) => decorateRef.current(raw)));
-          } finally {
-            setLoadingMessages(false);
-          }
-        }
-      }
-
-      const toastLabel = serverScopes.includes("all")
-        ? "Chat cleared"
-        : serverScopes.length
-          ? "Selected messages cleared"
-          : clearingStarred
-            ? "Starred messages cleared"
-            : "Chat cleared";
-
-      let undoUsed = false;
-      showToast(toastLabel, "success", 8000, {
-        actionLabel: "Undo",
-        onAction: () => {
-          if (undoUsed) return;
-          undoUsed = true;
-          void undoClearChat({
-            type,
-            id,
-            previousClearedEntries,
-            previousMessages,
-            previousStarredEntries,
-            hadServerClear: serverScopes.length > 0,
-          });
-        },
-      });
-      setClearChatOpen(false);
-    } catch (err) {
-      showToast(err.response?.data?.error || "Failed to clear chat", "error");
-    } finally {
-      setClearChatBusy(false);
-    }
-  }
-
-  async function undoClearChat({
-    type,
-    id,
-    previousClearedEntries,
-    previousMessages,
-    previousStarredEntries,
-    hadServerClear,
-  }) {
-    try {
-      if (hadServerClear) {
-        const payload =
-          type === "group"
-            ? { groupId: id, restoreEntries: previousClearedEntries }
-            : { peerId: id, restoreEntries: previousClearedEntries };
-        const { data } = await client.post("/users/me/clear-chat/undo", payload);
-        if (data?.data) updateSessionUser(data.data);
-      }
-
-      if (previousStarredEntries) {
-        setStarredIds(restoreStarredEntries(user.id, previousStarredEntries));
-      }
-
-      const current = selectedRef.current;
-      if (current && current.type === type && String(current.id) === String(id)) {
-        if (Array.isArray(previousMessages)) {
-          setMessages(previousMessages);
-        } else {
-          setLoadingMessages(true);
-          const endpoint = type === "group" ? `/groups/${id}/messages` : `/messages/${id}`;
-          try {
-            const res = await client.get(endpoint, { params: { limit: 80, markRead: 0 } });
-            setMessages((res.data.data || []).map((raw) => decorateRef.current(raw)));
-          } finally {
-            setLoadingMessages(false);
-          }
-        }
-      }
-
-      showToast("Clear undone", "success", 2500);
-    } catch (err) {
-      showToast(err.response?.data?.error || "Could not undo clear", "error");
-    }
-  }
-  async function handleUnblockUser(peerId) {
-    try {
-      const { data } = await client.delete(`/users/${peerId}/block`);
-      updateSessionUser(data.data);
-      showToast('User unblocked', 'success');
-    } catch (err) {
-      showToast(err.response?.data?.error || 'Failed to unblock', 'error');
-    }
-  }
+  const {
+    clearChatOpen,
+    setClearChatOpen,
+    clearChatBusy,
+    setClearChatBusy,
+    handleBlockUser,
+    executeBlockUser,
+    handleClearChat,
+    executeClearChatScoped,
+    undoClearChat,
+    handleUnblockUser,
+  } = useChatModerationAndClear({
+    user,
+    updateSessionUser,
+    showToast,
+    selected,
+    selectedRef,
+    messages,
+    setMessages,
+    setLoadingMessages,
+    decorateRef,
+    setStarredIds,
+    setUsers,
+    setHiddenChatIds,
+    setConfirmDialog,
+    setConfirmBusy,
+    applyConversationSelection,
+    setError,
+  });
   // Keydown to trigger search (Ctrl+K)
   useEffect(() => {
     function handleGlobalKeyDown(e) {
@@ -4333,6 +3099,16 @@ useEffect(() => {
   function handleDraftChange(e) {
     const value = e.target.value;
     setDraft(value);
+
+    const shortcutMatch = value.match(/(^|\s)(\/[^\s]*)$/);
+    if (shortcutMatch) {
+      setSavedReplyQuery(shortcutMatch[2].toLowerCase());
+      setSavedReplyOpen(savedReplies.length > 0);
+      setSavedReplyIndex(0);
+    } else {
+      setSavedReplyOpen(false);
+      setSavedReplyQuery("");
+    }
 
     if (selected?.type === "group") {
       const atMatch = value.match(/(^|\s)@([a-zA-Z0-9_.-]{0,32})$/);
@@ -4402,6 +3178,21 @@ useEffect(() => {
     textareaRef.current?.focus();
   }
 
+  function insertSavedReply(reply) {
+    setDraft((prev) => prev.replace(/(^|\s)\/[^\s]*$/, `$1${reply.message}`));
+    setSavedReplyOpen(false);
+    setSavedReplyQuery("");
+    setSavedReplyIndex(0);
+    setTimeout(() => {
+      const textarea = textareaRef.current;
+      if (textarea) {
+        textarea.focus();
+        textarea.selectionStart = textarea.value.length;
+        textarea.selectionEnd = textarea.value.length;
+      }
+    }, 0);
+  }
+
   function handleTextareaInput(e) {
     const el = e.target;
     el.style.height = "auto";
@@ -4409,7 +3200,34 @@ useEffect(() => {
   }
 
   function handleTextareaKeyDown(e) {
-    if (e.key === "Enter" && !e.shiftKey) {
+    if (savedReplyOpen && savedReplySuggestions.length > 0) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setSavedReplyOpen(false);
+        return;
+      }
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault();
+        setSavedReplyIndex((current) => e.key === "ArrowDown"
+          ? (current + 1) % savedReplySuggestions.length
+          : (current - 1 + savedReplySuggestions.length) % savedReplySuggestions.length);
+        return;
+      }
+      if (e.key === "Enter" && !e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey) {
+        e.preventDefault();
+        insertSavedReply(savedReplySuggestions[savedReplyIndex]);
+        return;
+      }
+    } else if (e.key === "Escape") {
+      setSavedReplyOpen(false);
+    }
+    if ((e.key === "Enter" || e.keyCode === 13) && !e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey) {
+      if (e.nativeEvent?.isComposing) return;
+      if (mentionOpen && mentionSuggestions.length > 0) {
+        e.preventDefault();
+        handleMentionSelect(mentionSuggestions[0].username);
+        return;
+      }
       e.preventDefault();
       handleSend(e);
     }
@@ -5004,7 +3822,7 @@ useEffect(() => {
     );
     return undefined;
   }
-  async function sendAttachmentFile(file, { plainBytes, quiet, viewOnce = false, offlineId, skipOutbox = false, offlineEntry } = {}) {
+  async function sendAttachmentFile(file, { plainBytes, quiet, viewOnce = false, offlineId, skipOutbox = false, offlineEntry, waveform, durationSeconds } = {}) {
     if (
       !file ||
       !selected ||
@@ -5034,11 +3852,28 @@ useEffect(() => {
         _id: pendingMessageId,
         from: user.id,
         ...(selected.type === "group" ? { group: selected.id } : { to: selected.id }),
-        text: file.name || "Attachment",
+        text: selected.type === "group"
+          ? encodeGroupFile({
+              attachmentId: uploadId,
+              filename: file.name,
+              mimetype: file.type || "application/octet-stream",
+              size: file.size,
+              waveform,
+              durationSeconds,
+            })
+          : (file.name || "Attachment"),
+        attachment: {
+          id: uploadId,
+          filename: file.name,
+          mimetype: file.type || "application/octet-stream",
+          size: file.size,
+        },
         createdAt: new Date().toISOString(),
         _status: "sending",
         _pending: true,
         _mediaPending: true,
+        ...(Array.isArray(waveform) ? { waveform } : {}),
+        ...(typeof durationSeconds === "number" && durationSeconds > 0 ? { durationSeconds } : {}),
       }];
     });
 
@@ -5122,6 +3957,8 @@ useEffect(() => {
           mimetype:
             attachment.mimetype || file.type || "application/octet-stream",
           size: attachment.size || file.size,
+          waveform,
+          durationSeconds,
         });
         const wantViewOnce = viewOnce && isViewOnceEligibleFile(file);
         await sendGroupPayload(plaintext, {
@@ -5280,6 +4117,8 @@ useEffect(() => {
         forSender,
         attachmentId,
       };
+      if (Array.isArray(waveform)) msgBody.waveform = waveform;
+      if (typeof durationSeconds === "number" && durationSeconds > 0) msgBody.durationSeconds = durationSeconds;
       if (disappearSeconds > 0) msgBody.expiresInSeconds = disappearSeconds;
       const wantViewOnce = viewOnce && isViewOnceEligibleFile(file);
       if (wantViewOnce) msgBody.viewOnce = true;
@@ -5523,8 +4362,8 @@ useEffect(() => {
     if (
       !selected ||
       (selected.type !== "dm" && selected.type !== "group") ||
-      sendingVoice ||
-      recording
+      voiceRecorder.sending ||
+      voiceRecorder.phase !== "idle"
     )
       return;
     const items = e.clipboardData?.items;
@@ -5618,155 +4457,6 @@ useEffect(() => {
     setVideoPlayer({ src: entry.src, filename: entry.alt });
   }
 
-  function clearRecordingResources({ keepChunks = false } = {}) {
-    if (recordTimerRef.current) {
-      clearInterval(recordTimerRef.current);
-      recordTimerRef.current = null;
-    }
-    if (mediaStreamRef.current) {
-      mediaStreamRef.current.getTracks().forEach((t) => t.stop());
-      mediaStreamRef.current = null;
-    }
-    mediaRecorderRef.current = null;
-    if (!keepChunks) recordChunksRef.current = [];
-    setRecordSeconds(0);
-    setRecording(false);
-  }
-
-  async function startVoiceRecording() {
-    if (
-      !selected ||
-      (selected.type !== "dm" && selected.type !== "group") ||
-      recording ||
-      sendingVoice
-    )
-      return;
-    if (
-      !navigator.mediaDevices?.getUserMedia ||
-      typeof MediaRecorder === "undefined"
-    ) {
-      showToast("Voice notes are not supported in this browser", "error");
-      return;
-    }
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-        },
-      });
-      mediaStreamRef.current = stream;
-      const mimeType = pickRecorderMimeType();
-      const recorder = mimeType
-        ? new MediaRecorder(stream, { mimeType })
-        : new MediaRecorder(stream);
-      mediaRecorderRef.current = recorder;
-      recordChunksRef.current = [];
-      recordStartedAtRef.current = Date.now();
-
-      recorder.ondataavailable = (event) => {
-        if (event.data?.size > 0) recordChunksRef.current.push(event.data);
-      };
-
-      recorder.onerror = () => {
-        clearRecordingResources();
-        showToast("Voice recording failed", "error");
-      };
-
-      recorder.onstop = async () => {
-        const chunks = recordChunksRef.current.slice();
-        const type = (recorder.mimeType || mimeType || "audio/webm").split(
-          ";",
-        )[0];
-        clearRecordingResources();
-        if (!chunks.length) {
-          showToast("No audio captured — try again", "error");
-          return;
-        }
-
-        const blob = new Blob(chunks, { type: type || "audio/webm" });
-        if (blob.size < 256) {
-          showToast("Recording too short — hold a bit longer", "error");
-          return;
-        }
-
-        const ext = type.includes("mp4")
-          ? "m4a"
-          : type.includes("ogg")
-            ? "ogg"
-            : "webm";
-        const file = new File([blob], `voice-note-${Date.now()}.${ext}`, {
-          type: type || "audio/webm",
-        });
-        const plainBytes = new Uint8Array(await blob.arrayBuffer());
-
-        setSendingVoice(true);
-        try {
-          await sendAttachmentFile(file, { plainBytes });
-        } catch (err) {
-          showToast(
-            err.response?.data?.error || "Failed to send voice note",
-            "error",
-          );
-        } finally {
-          setSendingVoice(false);
-        }
-      };
-
-      recorder.start(200);
-      setRecording(true);
-      setRecordSeconds(0);
-      recordTimerRef.current = setInterval(() => {
-        const elapsed = Math.floor(
-          (Date.now() - recordStartedAtRef.current) / 1000,
-        );
-        setRecordSeconds(elapsed);
-        if (elapsed >= MAX_VOICE_SECONDS) {
-          stopVoiceRecording();
-        }
-      }, 200);
-    } catch {
-      clearRecordingResources();
-      showToast("Microphone permission is required for voice notes", "error");
-    }
-  }
-
-  function stopVoiceRecording() {
-    const recorder = mediaRecorderRef.current;
-    if (!recorder || recorder.state === "inactive") {
-      clearRecordingResources();
-      return;
-    }
-    try {
-      if (recorder.state === "recording") recorder.requestData();
-    } catch {
-      // ignore
-    }
-    recorder.stop();
-  }
-
-  function cancelVoiceRecording() {
-    const recorder = mediaRecorderRef.current;
-    if (recorder && recorder.state !== "inactive") {
-      recorder.ondataavailable = null;
-      recorder.onstop = () => clearRecordingResources();
-      try {
-        recorder.stop();
-      } catch {
-        clearRecordingResources();
-      }
-      return;
-    }
-    clearRecordingResources();
-  }
-
-  useEffect(() => {
-    return () => {
-      if (recordTimerRef.current) clearInterval(recordTimerRef.current);
-      if (mediaStreamRef.current)
-        mediaStreamRef.current.getTracks().forEach((t) => t.stop());
-    };
-  }, []);
   useEffect(() => {
     if (!pendingJumpMessageId) return;
     const el = document.getElementById(`msg-${pendingJumpMessageId}`);
@@ -5853,96 +4543,6 @@ useEffect(() => {
       () => showToast("Copied to clipboard", "success"),
       () => showToast("Could not copy message", "error"),
     );
-  }
-
-  function handleStarMessage(messageId) {
-    if (!messageId || !selected) return;
-    const msg = messages.find((m) => String(m.id || m._id) === String(messageId));
-    const nextIds = toggleStarredMessage(
-      user.id,
-      msg || { id: messageId },
-      { key: selected.key, type: selected.type, id: selected.id, title: selected.title },
-    );
-    setStarredIds(nextIds);
-    setExtrasTick((n) => n + 1);
-  }
-
-  async function handleImportantMessage(messageOrId) {
-    const messageId = String(messageOrId?.id || messageOrId?._id || messageOrId || '');
-    if (!messageId) return;
-    const message = typeof messageOrId === 'object'
-      ? messageOrId
-      : messages.find((candidate) => String(candidate.id || candidate._id) === messageId);
-    const previous = importantEntries;
-    const existing = previous.some((entry) => String(entry.id || entry._id) === messageId);
-
-    if (existing) {
-      const wasAutomatic = Boolean(getAutomaticImportantSource(message || previous.find((entry) => String(entry.id || entry._id) === messageId) || {}));
-      if (wasAutomatic) {
-        rememberAutoImportantRemoval(user.id, messageId);
-      }
-      setImportantEntries((current) => current.filter((entry) => String(entry.id || entry._id) !== messageId));
-      try {
-        await client.delete(`/messages/${messageId}/important`);
-        showToast('Removed from Important messages', 'success');
-      } catch (err) {
-        setImportantEntries(previous);
-        showToast(err.response?.data?.error || "Couldn't remove message. Try again.", 'error');
-      }
-      return;
-    }
-
-    clearAutoImportantRemoval(user.id, messageId);
-    const rawConversation = selected;
-    const optimistic = {
-      ...message,
-      id: messageId,
-      type: rawConversation?.type || (message?.group ? 'group' : 'dm'),
-      conversationId: rawConversation?.id || (message?.group ? message.group : message?.from),
-      conversationKey: rawConversation?.key || null,
-      title: rawConversation?.title || 'Chat',
-      isImportant: true,
-      important: true,
-      importantAt: new Date().toISOString(),
-      hasAttachment: Boolean(message?.attachment),
-      attachmentFilename: message?.attachment?.filename || null,
-      importantSource: getAutomaticImportantSource(message || {}),
-    };
-    setImportantEntries((current) => [optimistic, ...current]);
-    try {
-      await client.post(`/messages/${messageId}/important`);
-      showToast('Message saved to Important messages', 'success');
-    } catch (err) {
-      setImportantEntries(previous);
-      showToast(err.response?.data?.error || "Couldn't save message. Try again.", 'error');
-    }
-  }
-
-  async function handlePinMessage(messageId) {
-    if (!selected?.key) return;
-    if (selected.type === "group") {
-      const pinned = (selected.group?.pinnedMessageIds || []).map(String);
-      const isPinned = pinned.includes(String(messageId));
-      try {
-        const { data } = isPinned
-          ? await client.delete(`/groups/${selected.id}/pins/${messageId}`)
-          : await client.post(`/groups/${selected.id}/pins/${messageId}`);
-        const group = data.data;
-        setGroups((prev) =>
-          prev.map((g) => (String(g.id) === String(group.id) ? group : g)),
-        );
-        setSelected((prev) =>
-          prev ? { ...prev, group, title: group.name || prev.title } : prev,
-        );
-        setPinnedIds((group.pinnedMessageIds || []).map(String));
-        setExtrasTick((n) => n + 1);
-      } catch (err) {
-        showToast(err.response?.data?.error || "Failed to update pin", "error");
-      }
-      return;
-    }
-    setPinnedIds(togglePinnedMessage(user.id, selected.key, messageId));
-    setExtrasTick((n) => n + 1);
   }
 
   async function handleVotePoll(messageId, optionIndex) {
@@ -6109,8 +4709,43 @@ useEffect(() => {
     }
     if (confirmDialog.type === "regenerate-keys") {
       await handleGenerateKeys();
+      return;
+    }
+    if (confirmDialog.type === "accept-with-warning") {
+      await executeAcceptFriendRequest(confirmDialog.requestId);
+      setConfirmDialog(null);
     }
   }
+
+  useEffect(() => {
+    setVoiceThreadOrder(messages.map((m) => m.id || m._id));
+  }, [messages]);
+
+  const handleVoiceListened = useCallback(async (messageId) => {
+    if (!messageId || !user?.id) return;
+    try {
+      setMessages((prev) =>
+        prev.map((m) => {
+          if (String(m.id || m._id) === String(messageId)) {
+            const currentListened = m.listenedBy || [];
+            if (!currentListened.some((e) => String(e.user) === String(user.id))) {
+              return {
+                ...m,
+                listenedBy: [
+                  ...currentListened,
+                  { user: String(user.id), at: new Date().toISOString() },
+                ],
+              };
+            }
+          }
+          return m;
+        }),
+      );
+      await client.post(`/messages/${messageId}/listened`);
+    } catch {
+      // silent
+    }
+  }, [user?.id]);
 
   async function handleReactMessage(messageId, emoji) {
     if (!messageId || !emoji || !selected) return;
@@ -6242,42 +4877,6 @@ useEffect(() => {
     logout();
   }
 
-  async function handleStartCall(video) {
-    if (!selected || selected.type !== "dm") return;
-    if (selected.isSelfChat || String(selected.id) === String(user.id)) return;
-    try {
-      await webrtc.startCall({
-        peerId: selected.id,
-        peerName: title,
-        video,
-      });
-    } catch (err) {
-      showToast(
-        err.response?.data?.error ||
-        err.message ||
-        "Could not start the call. Check your connection and try again.",
-        "error",
-      );
-    }
-  }
-
-  async function handleStartMeeting(video) {
-    if (!selected || selected.type !== "group") return;
-    try {
-      await meetingCall.startMeeting({
-        groupId: selected.id,
-        video,
-      });
-    } catch (err) {
-      showToast(
-        err.response?.data?.error ||
-        err.message ||
-        "Could not start the meeting. Check your connection and try again.",
-        "error",
-      );
-    }
-  }
-
   // Only sent-bubble color and wallpaper vary by theme — received bubbles
   // stay the default white so text stays readable regardless of which
   // theme color is picked. When the theme is 'default', the var is left
@@ -6380,6 +4979,18 @@ useEffect(() => {
     [activeGroup, user.id],
   );
 
+  const voiceRecorder = useVoiceRecorder({
+    activeChatKey: selected?.key,
+    maxSeconds: MAX_VOICE_SECONDS,
+    disabled:
+      uploads.length > 0 ||
+      (selected?.type === "group" && !canPostInGroup),
+    onSendVoice: async (file, meta) => {
+      await sendAttachmentFile(file, meta);
+    },
+    onError: (err) => showToast(err, "error"),
+  });
+
   function mentionBlockReason(m) {
     const policy = m.privacy?.groupMentions || "everyone";
     if (policy === "nobody") return "mentions_off";
@@ -6400,6 +5011,13 @@ useEffect(() => {
       .slice(0, 6);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mentionOpen, mentionQuery, activeGroup, user.id, iAmGroupAdmin]);
+
+  const savedReplySuggestions = useMemo(() => {
+    if (!savedReplyOpen) return [];
+    return savedReplies
+      .filter((reply) => reply.shortcut.toLowerCase().startsWith(savedReplyQuery))
+      .slice(0, 6);
+  }, [savedReplyOpen, savedReplies, savedReplyQuery]);
 
   async function submitPollDraft(e) {
     e?.preventDefault?.();
@@ -6608,6 +5226,7 @@ useEffect(() => {
           showToast(text, 'error');
         }}
         notifSettings={notifSettings}
+        unreadNotificationCount={unreadNotificationCount}
         search={search}
         onSearchChange={setSearch}
         conversations={conversations}
@@ -6616,6 +5235,9 @@ useEffect(() => {
         selectedKey={selected?.key}
         onSelect={handleSelectConversation}
         onCreateGroup={() => setShowCreateGroup(true)}
+        liveStreams={liveStreams}
+        onGoLive={openGoLive}
+        onWatchLive={watchLive}
         onDiscoverJoin={handleDiscoverJoin}
         onHide={handleHideChat}
         onBlock={handleBlockUser}
@@ -6639,6 +5261,13 @@ useEffect(() => {
           showToast(c.pinned ? "Chat unpinned" : "Chat pinned", "info");
         }}
         onToggleVault={(c) => handleToggleVault(c.id)}
+        onToggleChatLock={handleToggleChatLock} 
+        chatFolders={chatFolders}
+        onCreateFolder={(c) =>
+          setFolderEditor({ folder: null, initialKeys: c ? [String(c.key)] : [] })
+        }
+        onEditFolder={(folder) => setFolderEditor({ folder, initialKeys: [] })}
+        onToggleChatInFolder={handleToggleChatInFolder}
         loadingUsers={loadingUsers}
         hasMoreContacts={!searchResults && (usersHasMore || groupsHasMore)}
         onLoadMoreContacts={loadMoreContacts}
@@ -7101,6 +5730,8 @@ useEffect(() => {
                       !selected.isSelfChat &&
                       isPeerVaulted(selected.id)
                     }
+                    isChatLocked={isChatLocked(selected.key)}
+                    onToggleChatLock={selected.isSelfChat ? undefined : () => handleToggleChatLock(selected)}
                     compactExtras={isCompactChrome}
                     onOpenAi={() => setAiPanelOpen((open) => !open)}
                     onOpenInfo={toggleInfoPanel}
@@ -7370,6 +6001,16 @@ useEffect(() => {
                                   }
                                   : undefined
                               }
+                              onListened={handleVoiceListened}
+                              senderAvatar={
+                                String(m.from) !== String(user.id)
+                                  ? {
+                                      userId: String(m.from),
+                                      name: usernameById.get(String(m.from)) || "User",
+                                      hasAvatar: Boolean(userById.get(String(m.from))?.hasAvatar || userById.get(String(m.from))?.avatarUrl),
+                                    }
+                                  : undefined
+                              }
                             />
                           </div>
                         );
@@ -7458,49 +6099,33 @@ useEffect(() => {
                     );
                   })()}
 
-                {recording ? (
-                  <div className="composer composer-recording">
-                    <button
-                      type="button"
-                      className="attach-button voice-cancel-btn"
-                      onClick={cancelVoiceRecording}
-                      aria-label="Cancel voice note"
-                    >
-                      <X size={20} strokeWidth={2} aria-hidden="true" />
-                    </button>
-                    <div className="voice-recording-status">
-                      <span className="voice-recording-dot" />
-                      <span>Recording {formatVoiceTimer(recordSeconds)}</span>
-                      <span className="voice-recording-hint">
-                        max {MAX_VOICE_SECONDS}s
-                      </span>
-                    </div>
-                    <button
-                      type="button"
-                      className="send-button voice-stop-btn"
-                      onClick={stopVoiceRecording}
-                      aria-label="Send voice note"
-                    >
-                      <Square
-                        size={16}
-                        fill="currentColor"
-                        strokeWidth={0}
-                        aria-hidden="true"
-                      />
-                    </button>
-                  </div>
-                ) : !canPostInGroup ? (
-                  <div className="composer-shell">
+                <div className="composer-shell">
+                  {voiceRecorder.phase !== "idle" ? (
+                    <VoiceNoteBar
+                      phase={voiceRecorder.phase}
+                      seconds={voiceRecorder.seconds}
+                      levels={voiceRecorder.levels}
+                      paused={voiceRecorder.paused}
+                      previewUrl={voiceRecorder.previewUrl}
+                      previewMeta={voiceRecorder.previewMeta}
+                      maxSeconds={MAX_VOICE_SECONDS}
+                      sending={voiceRecorder.sending}
+                      onCancel={voiceRecorder.cancelRecording}
+                      onStop={voiceRecorder.stopToPreview}
+                      onDiscard={voiceRecorder.discardPreview}
+                      onTogglePause={voiceRecorder.togglePause}
+                      onSend={voiceRecorder.handleVoiceSend}
+                    />
+                  ) : !canPostInGroup ? (
                     <div
                       className="composer-hint"
                       style={{ justifyContent: "center", padding: "14px" }}
                     >
                       Only admins can post in this group
                     </div>
-                  </div>
-                ) : (
-                  <div className="composer-shell">
-                    {showEmojiPicker && (
+                  ) : (
+                    <>
+                      {showEmojiPicker && (
                       <EmojiPicker
                         onPick={insertEmoji}
                         onClose={() => setShowEmojiPicker(false)}
@@ -7636,7 +6261,7 @@ useEffect(() => {
                         className={`attach-button ${composerPlusOpen ? "active" : ""}`}
                         onClick={() => setComposerPlusOpen(true)}
                         aria-label="More message actions"
-                        disabled={sendingVoice || uploads.length > 0}
+                        disabled={voiceRecorder.sending || uploads.length > 0}
                       >
                         <Plus size={20} strokeWidth={2} aria-hidden="true" />
                       </button>
@@ -7645,7 +6270,7 @@ useEffect(() => {
                         className={`attach-button ${showEmojiPicker ? "active" : ""}`}
                         onClick={() => setShowEmojiPicker((v) => !v)}
                         aria-label="Open emoji picker"
-                        disabled={sendingVoice}
+                        disabled={voiceRecorder.sending}
                       >
                         <Smile size={20} strokeWidth={2} aria-hidden="true" />
                       </button>
@@ -7661,7 +6286,7 @@ useEffect(() => {
                         ref={textareaRef}
                         dir="auto"
                         placeholder={
-                          sendingVoice
+                          voiceRecorder.sending
                             ? t('chat.sendingVoice', 'Sending voice note…')
                             : uploads.length
                               ? t('chat.placeholderUploading', 'Uploading encrypted file…')
@@ -7680,15 +6305,33 @@ useEffect(() => {
                         onKeyDown={handleTextareaKeyDown}
                         onPaste={handlePaste}
                         aria-label={t('chat.placeholderDirect', 'Type message body')}
-                        disabled={sendingVoice}
+                        disabled={voiceRecorder.sending}
                         rows={1}
                       />
+                      {savedReplyOpen && savedReplySuggestions.length > 0 && (
+                        <div className="saved-reply-suggestions" role="listbox" aria-label="Saved replies">
+                          {savedReplySuggestions.map((reply, index) => (
+                            <button
+                              key={reply.id}
+                              type="button"
+                              className={`saved-reply-suggestion ${index === savedReplyIndex ? "active" : ""}`}
+                              onMouseDown={(event) => event.preventDefault()}
+                              onClick={() => insertSavedReply(reply)}
+                              role="option"
+                              aria-selected={index === savedReplyIndex}
+                            >
+                              <strong>{reply.shortcut}</strong>
+                              <span>{reply.message}</span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
                       {draft.trim() ? (
                         <button
                           type="submit"
                           className="send-button"
                           aria-label="Send encrypted message"
-                          disabled={sendingVoice}
+                          disabled={voiceRecorder.sending}
                         >
                           <Send size={18} strokeWidth={2} aria-hidden="true" />
                         </button>
@@ -7696,16 +6339,22 @@ useEffect(() => {
                         <button
                           type="button"
                           className="send-button voice-mic-btn"
-                          onClick={startVoiceRecording}
                           aria-label="Record voice note"
-                          disabled={sendingVoice || uploads.length > 0}
+                          title="Record voice note"
+                          disabled={voiceRecorder.sending || uploads.length > 0}
+                          onClick={async (e) => {
+                            e.preventDefault();
+                            const res = await voiceRecorder.startRecording();
+                            if (res?.error) showToast(res.error, "error");
+                          }}
                         >
                           <Mic size={18} strokeWidth={2} aria-hidden="true" />
                         </button>
                       )}
                     </form>
-                  </div>
+                  </>
                 )}
+              </div>
               </>
             )}
           </>
@@ -7802,6 +6451,26 @@ useEffect(() => {
             showToast("Could not share your screen", "error");
           })
         }
+        audioDevices={webrtc.audioDevices}
+        videoDevices={webrtc.videoDevices}
+        audioDeviceId={webrtc.audioDeviceId}
+        videoDeviceId={webrtc.videoDeviceId}
+        noiseCancel={webrtc.noiseCancel}
+        onSwitchAudioDevice={(id) =>
+          webrtc.switchAudioDevice(id).catch(() =>
+            showToast("Could not switch microphone", "error"),
+          )
+        }
+        onSwitchVideoDevice={(id) =>
+          webrtc.switchVideoDevice(id).catch(() =>
+            showToast("Could not switch camera", "error"),
+          )
+        }
+        onSetNoiseCancel={(enabled) =>
+          webrtc.setNoiseCancel(enabled).catch(() =>
+            showToast("Could not update noise cancellation", "error"),
+          )
+        }
         minimized={callMinimized}
         onToggleMinimize={(next) =>
           setCallMinimized((v) => (typeof next === "boolean" ? next : !v))
@@ -7834,7 +6503,87 @@ useEffect(() => {
               onEndForAll={meetingCall.endMeetingForAll}
               onToggleMute={meetingCall.toggleMute}
               onToggleCamera={meetingCall.toggleCamera}
+              audioDevices={meetingCall.audioDevices}
+              videoDevices={meetingCall.videoDevices}
+              audioDeviceId={meetingCall.audioDeviceId}
+              videoDeviceId={meetingCall.videoDeviceId}
+              noiseCancel={meetingCall.noiseCancel}
+              onSwitchAudioDevice={(id) =>
+                meetingCall.switchAudioDevice(id).catch(() =>
+                  showToast("Could not switch microphone", "error"),
+                )
+              }
+              onSwitchVideoDevice={(id) =>
+                meetingCall.switchVideoDevice(id).catch(() =>
+                  showToast("Could not switch camera", "error"),
+                )
+              }
+              onSetNoiseCancel={(enabled) =>
+                meetingCall.setNoiseCancel(enabled).catch(() =>
+                  showToast("Could not update noise cancellation", "error"),
+                )
+              }
               onOpenAddParticipant={() => setShowAddParticipantModal(true)}
+            />
+          </Suspense>
+        </LazyChunkErrorBoundary>
+      )}
+
+      {showGoLive && !liveCall.live && (
+        <LazyChunkErrorBoundary onClose={() => setShowGoLive(false)}>
+          <Suspense fallback={<ModalLoadingFallback />}>
+            <GoLiveModal
+              friends={myFriends}
+              groups={groups}
+              defaultGroupId={selected?.type === "group" ? String(selected.id) : ""}
+              onClose={() => setShowGoLive(false)}
+              onStart={async (opts) => {
+                await liveCall.startBroadcast(opts);
+                setShowGoLive(false);
+                refreshLiveStreams();
+              }}
+            />
+          </Suspense>
+        </LazyChunkErrorBoundary>
+      )}
+
+      {Boolean(liveCall.live) && (
+        <LazyChunkErrorBoundary onClose={liveCall.leave}>
+          <Suspense fallback={<ModalLoadingFallback />}>
+            <LiveStreamOverlay
+              live={liveCall.live}
+              localStream={liveCall.localStream}
+              remoteStream={liveCall.remoteStream}
+              viewerCount={liveCall.viewerCount}
+              viewers={liveCall.viewers}
+              comments={liveCall.comments}
+              reactions={liveCall.reactions}
+              muted={liveCall.muted}
+              cameraOff={liveCall.cameraOff}
+              connection={liveCall.connection}
+              recording={liveCall.recording}
+              friends={myFriends}
+              onEnd={() => {
+                liveCall.endBroadcast().finally(refreshLiveStreams);
+              }}
+              onLeave={() => {
+                liveCall.leave();
+                refreshLiveStreams();
+              }}
+              onReconnect={liveCall.reconnect}
+              onComment={liveCall.postComment}
+              onReaction={liveCall.sendReaction}
+              onToggleComments={liveCall.setAllowComments}
+              onToggleMute={liveCall.toggleMute}
+              onToggleCamera={liveCall.toggleCamera}
+              onInvite={liveCall.inviteViewers}
+              onRemoveViewer={(viewerId) =>
+                liveCall.removeViewer(viewerId).catch(() =>
+                  showToast("Could not remove viewer", "error"),
+                )
+              }
+              onSaveRecording={liveCall.saveRecording}
+              onDiscardRecording={liveCall.discardRecording}
             />
           </Suspense>
         </LazyChunkErrorBoundary>
@@ -7843,34 +6592,9 @@ useEffect(() => {
       {showAddParticipantModal && (
         <AddParticipantModal
           users={users}
-          currentParticipantIds={
-            meetingCall.meeting
-              ? [user?.id, ...Array.from(meetingCall.participants.keys())]
-              : webrtc.call
-                ? [user?.id, webrtc.call.peerId]
-                : [user?.id]
-          }
+          currentParticipantIds={currentParticipantIds}
           onClose={() => setShowAddParticipantModal(false)}
-          onAddParticipant={async (targetUser) => {
-            try {
-              if (meetingCall.meeting) {
-                await meetingCall.inviteParticipant(targetUser);
-                showToast(`Invited ${targetUser.displayName || targetUser.username} to call`, "success");
-              } else if (webrtc.call) {
-                const originalPeerId = webrtc.call.peerId;
-                const originalPeerUser = users.find((u) => String(u.id) === String(originalPeerId));
-                await meetingCall.startMeeting({
-                  video: Boolean(webrtc.call.video),
-                });
-                await meetingCall.inviteParticipant({ id: originalPeerId, publicKeys: originalPeerUser?.publicKeys || [] });
-                await meetingCall.inviteParticipant(targetUser);
-                webrtc.hangup();
-                showToast(`Created group meeting & invited ${targetUser.displayName || targetUser.username}`, "success");
-              }
-            } catch (err) {
-              showToast("Could not invite participant", "error");
-            }
-          }}
+          onAddParticipant={handleAddParticipant}
         />
       )}
 
@@ -7881,6 +6605,21 @@ useEffect(() => {
               users={users}
               onClose={() => setShowCreateGroup(false)}
               onCreate={handleCreateGroup}
+            />
+          </Suspense>
+        </LazyChunkErrorBoundary>
+      )}
+
+      {folderEditor && (
+        <LazyChunkErrorBoundary onClose={() => setFolderEditor(null)}>
+          <Suspense fallback={<ModalLoadingFallback />}>
+            <ChatFolderModal
+              folder={folderEditor.folder}
+              initialKeys={folderEditor.initialKeys}
+              conversations={conversationItems}
+              onClose={() => setFolderEditor(null)}
+              onSave={handleSaveFolder}
+              onDelete={handleDeleteFolder}
             />
           </Suspense>
         </LazyChunkErrorBoundary>
@@ -7948,25 +6687,8 @@ useEffect(() => {
                 .includes(String(conversationKeyForUser(profileUserId)))}
               isFriend={isFriendWith(profileUserId)}
               onRemoveFriend={async (peer) => {
-                try {
-                  await client.delete(`/users/friends/${peer.id}`);
-                  try {
-                    const { data } = await client.get("/users/me");
-                    if (data?.data) updateSessionUser(data.data);
-                  } catch {
-                    // non-fatal
-                  }
-                  showToast("Friend removed", "success");
-                  setProfileUserId(null);
-                  loadDirectory();
-                  loadMyFriends();
-                  loadFriendDiscover(search);
-                } catch (err) {
-                  showToast(
-                    err.response?.data?.error || "Failed to remove friend",
-                    "error",
-                  );
-                }
+                await handleRemoveFriend(peer);
+                setProfileUserId(null);
               }}
               onMute={() => {
                 const key = conversationKeyForUser(profileUserId);
@@ -8241,6 +6963,10 @@ useEffect(() => {
                 a.click();
                 showToast("Chat exported from this device", "success");
               }}
+              savedReplies={savedReplies}
+              savedRepliesLoading={savedRepliesLoading}
+              savedRepliesError={savedRepliesError}
+              onSavedRepliesChanged={setSavedReplies}
             />
           </Suspense>
         </LazyChunkErrorBoundary>
@@ -8287,6 +7013,23 @@ useEffect(() => {
           }}
         />
       )}
+      {selected && threadBlockedByLock && isChatLocked(selected.key) && (
+        <ChatLockPinModal opaque title="Chat locked" subtitle="Enter your PIN to open this chat"
+          confirmLabel="Unlock" closeLabel="Back"
+          onSubmit={async (pin) => { await unlockChatLock(pin); }}
+          onClose={() => applyConversationSelection(null)} />
+      )}
+      {showChatLockSetup && (
+        <ChatLockSetupModal
+          onClose={() => { setShowChatLockSetup(false); setPendingLockKey(null); }}
+          onDone={() => { setShowChatLockSetup(false); if (pendingLockKey) applyChatLock(pendingLockKey); }} />
+      )}
+      {removeLockKey && (
+        <ChatLockPinModal title="Remove chat lock" subtitle="Enter your PIN to stop locking this chat"
+          confirmLabel="Remove lock"
+          onSubmit={async (pin) => { await unlockChat(removeLockKey, pin); setRemoveLockKey(null); showToast("Chat lock removed", "success"); }}
+          onClose={() => setRemoveLockKey(null)} />
+      )}
       {showVaultUnlock && (
         <VaultUnlockModal
           onClose={() => setShowVaultUnlock(false)}
@@ -8305,11 +7048,7 @@ useEffect(() => {
         >
           <Suspense fallback={<ModalLoadingFallback />}>
             <StarredMessagesModal
-              entries={
-                (starredScope === 'chat' && selected
-                  ? [...importantEntries, ...getStarredEntries(user.id)].filter((e) => e.conversationKey === selected.key)
-                  : [...importantEntries, ...getStarredEntries(user.id)])
-              }
+              entries={starredAndImportantEntries}
               usernameById={usernameById}
               currentUserId={user.id}
               onSelect={handleOpenStarredEntry}
@@ -8321,11 +7060,7 @@ useEffect(() => {
                   () => showToast('Could not copy message', 'error'),
                 );
               }}
-              onUnstar={(id) => {
-                const nextIds = toggleStarredMessage(user.id, { id }, null);
-                setStarredIds(nextIds);
-                setExtrasTick((n) => n + 1);
-              }}
+              onUnstar={handleUnstarMessage}
               onRemoveImportant={handleImportantMessage}
               loading={importantLoading}
               onClose={() => {

@@ -1,6 +1,7 @@
 import axios from 'axios';
 import { getToken } from '../crypto/keyStorage.js';
 import { getApiUrl } from './baseUrl.js';
+import { getChatLockToken } from './chatLockToken.js';
 import { getVaultToken } from './vaultToken.js';
 
 const client = axios.create({
@@ -15,6 +16,10 @@ client.interceptors.request.use((config) => {
   const vaultToken = getVaultToken();
   if (vaultToken) {
     config.headers['x-vault-token'] = vaultToken;
+  }
+  const chatLockToken = getChatLockToken();
+  if (chatLockToken) {
+    config.headers['x-chat-lock-token'] = chatLockToken;
   }
   return config;
 });
@@ -59,6 +64,29 @@ export async function unmuteChat(payload) {
   const { data } = await client.post('/users/me/unmute', payload);
   return data;
 }
+export async function createChatFolder(payload) {
+  const { data } = await client.post('/users/me/chat-folders', payload);
+  return data;
+}
+
+export async function updateChatFolder(folderId, payload) {
+  const { data } = await client.patch(`/users/me/chat-folders/${encodeURIComponent(folderId)}`, payload);
+  return data;
+}
+
+export async function setChatFolderMembership(folderId, conversationKey, included) {
+  const { data } = await client.put(`/users/me/chat-folders/${encodeURIComponent(folderId)}/chats`, {
+    conversationKey,
+    included,
+  });
+  return data;
+}
+
+export async function deleteChatFolder(folderId) {
+  const { data } = await client.delete(`/users/me/chat-folders/${encodeURIComponent(folderId)}`);
+  return data;
+}
+
 export async function clearChat(payload) {
   const { data } = await client.post('/users/me/clear-chat', payload);
   return data;

@@ -1,10 +1,10 @@
 import { useTranslation } from 'react-i18next';
+import { getDisplayName } from '../../utils/getDisplayName.js';
 import BrandLogo from '../BrandLogo.jsx';
 import ConversationList from '../ConversationList.jsx';
 import NotificationPermissionBanner from '../NotificationPermissionBanner.jsx';
 import SidebarMenu from '../SidebarMenu.jsx';
 import StoriesRail from '../StoriesRail.jsx';
-import { getDisplayName } from '../../utils/getDisplayName.js';
 
 /**
  * Left conversation pane — list, filters, stories.
@@ -32,6 +32,9 @@ export default function ConversationPane({
   selectedKey,
   onSelect,
   onCreateGroup,
+  liveStreams = [],
+  onGoLive,
+  onWatchLive,
   onDiscoverJoin,
   onHide,
   onBlock,
@@ -39,6 +42,11 @@ export default function ConversationPane({
   onArchive,
   onPin,
   onToggleVault,
+  chatFolders = [],
+  onCreateFolder,
+  onEditFolder,
+  onToggleChatInFolder,
+  onToggleChatLock,
   loadingUsers,
     hasMoreContacts,
   onLoadMoreContacts,
@@ -61,6 +69,7 @@ export default function ConversationPane({
   onOpenFriend,
   onlineUserIds,  
   onOpenStarred,
+  unreadNotificationCount = 0,
 }) {
   const { t, i18n } = useTranslation();
 
@@ -91,6 +100,7 @@ export default function ConversationPane({
             vaultEnabled={vaultEnabled}
             vaultUnlocked={vaultUnlocked}
             onOpenVault={onOpenVault}
+            unreadNotificationCount={unreadNotificationCount}
           />
           </div>
         </div>
@@ -103,6 +113,9 @@ export default function ConversationPane({
               users={users}
               onError={onStoriesError}
               notifSettings={notifSettings}
+              liveStreams={liveStreams}
+              onGoLive={onGoLive}
+              onWatchLive={onWatchLive}
             />
             <div className="sidebar-search">
               <input
@@ -130,6 +143,11 @@ export default function ConversationPane({
             onArchive={onArchive}
             onPin={onPin}
             onToggleVault={onToggleVault}
+            onToggleChatLock={onToggleChatLock}
+            chatFolders={chatFolders}
+            onCreateFolder={onCreateFolder}
+            onEditFolder={onEditFolder}
+            onToggleChatInFolder={onToggleChatInFolder}
             loading={loadingUsers}
             searchQuery={search}
             friendCandidates={friendCandidates}
