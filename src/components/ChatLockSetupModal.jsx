@@ -1,5 +1,5 @@
-import { Lock, X } from 'lucide-react';
 import { useState } from 'react';
+import { Lock, X } from 'lucide-react';
 import { useChatLock } from '../context/ChatLockContext.jsx';
 
 /**
@@ -66,7 +66,11 @@ export default function ChatLockSetupModal({ changing = false, onClose, onDone }
             <label className="create-group-field">
               <span className="create-group-label">Current PIN</span>
               <input
-                type="password"
+                type="text"
+              style={{ WebkitTextSecurity: 'disc' }}
+              name="chat-lock-pin"
+              data-lpignore="true"
+              data-1p-ignore="true"
                 inputMode="numeric"
                 maxLength={8}
                 className="create-group-input"
@@ -79,7 +83,11 @@ export default function ChatLockSetupModal({ changing = false, onClose, onDone }
           <label className="create-group-field">
             <span className="create-group-label">New PIN (4 to 8 digits)</span>
             <input
-              type="password"
+              type="text"
+              style={{ WebkitTextSecurity: 'disc' }}
+              name="chat-lock-pin"
+              data-lpignore="true"
+              data-1p-ignore="true"
               inputMode="numeric"
               maxLength={8}
               className="create-group-input"
@@ -92,7 +100,11 @@ export default function ChatLockSetupModal({ changing = false, onClose, onDone }
           <label className="create-group-field">
             <span className="create-group-label">Confirm PIN</span>
             <input
-              type="password"
+              type="text"
+              style={{ WebkitTextSecurity: 'disc' }}
+              name="chat-lock-pin"
+              data-lpignore="true"
+              data-1p-ignore="true"
               inputMode="numeric"
               maxLength={8}
               className="create-group-input"
