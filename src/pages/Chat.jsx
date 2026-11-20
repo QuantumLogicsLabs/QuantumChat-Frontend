@@ -28,10 +28,10 @@ import client, {
   muteChat,
   unmuteChat,
 } from "../api/client.js";
-import { listSavedReplies } from "../api/savedReplies.js";
 import { listLive } from "../api/live.js";
 import { getUnreadCount as fetchUnreadNotificationCount } from "../api/notifications.js";
 import { postPresenceHeartbeat } from "../api/presence.js";
+import { listSavedReplies } from "../api/savedReplies.js";
 import { connectSocket, getSocket } from "../api/socket.js";
 import { getPeerVaultDecoyStatus } from "../api/vault.js";
 import CallOverlay from "../components/CallOverlay.jsx";
@@ -43,6 +43,7 @@ import ConversationPane from "../components/chat/ConversationPane.jsx";
 import InfoPanel from "../components/chat/InfoPanel.jsx";
 import MediaSendPreview from "../components/chat/MediaSendPreview.jsx";
 import MessageActionSheet from "../components/chat/MessageActionSheet.jsx";
+import ReminderPickerSheet from "../components/chat/ReminderPickerSheet.jsx";
 import SwipeableMessage from "../components/chat/SwipeableMessage.jsx";
 import ChatLockPinModal from "../components/ChatLockPinModal.jsx";
 import ChatLockSetupModal from "../components/ChatLockSetupModal.jsx";
@@ -90,6 +91,7 @@ import useChatModerationAndClear from "../hooks/useChatModerationAndClear.js";
 import useChatSocketEvents from "../hooks/useChatSocketEvents.js";
 import useFriendships from "../hooks/useFriendships.js";
 import useLiveStream from "../hooks/useLiveStream.js";
+import useOnboardingTour from "../hooks/useOnboardingTour.js";
 import usePinnedAndStarredMessages from "../hooks/usePinnedAndStarredMessages.js";
 import { useScreenshotProtection } from "../hooks/useScreenshotProtection.js";
 import useVoiceRecorder from "../hooks/useVoiceRecorder.js";
@@ -122,7 +124,6 @@ import {
   isGroupAdmin,
   preferConfirmedThreadText,
 } from "../utils/groupPayload.js";
-import useOnboardingTour from "../hooks/useOnboardingTour.js";
 
 import {
   getHiddenChatIds,
@@ -439,6 +440,7 @@ export default function Chat() {
     getInfoPanelOpen(),
   );
   const [actionSheetMessage, setActionSheetMessage] = useState(null);
+  const [reminderMessage, setReminderMessage] = useState(null);
   const [messageInfoData, setMessageInfoData] = useState(null);
   const [editHistoryMessage, setEditHistoryMessage] = useState(null);
   const [isMobileShell, setIsMobileShell] = useState(() =>
@@ -813,6 +815,16 @@ useEffect(() => {
 
   // ---- Notification action handling (Reply / Mark as Read / call actions) ---
   const [notificationAction, setNotificationAction] = useState(null);
+   useEffect(() => {
+    const mid = new URLSearchParams(location.search).get('reminder');
+    if (!mid) return;
+    const el = document.getElementById(`msg-${mid}`);
+    if (!el) return; // retries when `messages` loads
+    el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    el.classList.add('qc-msg-highlight');
+    const t = setTimeout(() => el.classList.remove('qc-msg-highlight'), 2500);
+    return () => clearTimeout(t);
+  }, [location.search, messages]);
 
   // Path A — cold boot via openWindow(), action arrives as query params.
   useEffect(() => {
@@ -7348,8 +7360,19 @@ useEffect(() => {
         }
         onStar={(msg) => handleStarMessage(msg?.id || msg?._id || msg)}
         onImportant={handleImportantMessage}
+        onRemind={setReminderMessage}
         onPin={(msg) => handlePinMessage(msg?.id || msg?._id || msg)}
         onShowInfo={handleShowMessageInfo}
+      />
+
+      <ReminderPickerSheet
+        open={Boolean(reminderMessage)}
+        message={reminderMessage}
+        onClose={() => setReminderMessage(null)}
+        onCreated={(date) =>
+          showToast(`Reminder set for ${date.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}`, 'success')
+        }
+        onError={(text) => showToast(text, 'error')}
       />
 
       {capsuleUnlocksAt && (
