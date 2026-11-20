@@ -2,6 +2,17 @@ import client from '../api/client.js';
 import { unsealMessage } from '../crypto/keys.js';
 import { findSecretKeyForPublicKey, getKeyring } from '../crypto/keyStorage.js';
 
+/** Return only browser-generated blob URLs for DOM media elements. */
+export function safeStoryObjectUrl(value) {
+  if (typeof value !== 'string' || !value) return '';
+  try {
+    const parsed = new URL(value, window.location.href);
+    return parsed.protocol === 'blob:' ? parsed.href : '';
+  } catch {
+    return '';
+  }
+}
+
 function base64ToBytes(b64) {
   const normalized = String(b64 || '')
     .replace(/-/g, '+')
