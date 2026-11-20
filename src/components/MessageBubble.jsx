@@ -1,5 +1,6 @@
 import { motion } from 'framer-motion';
 import {
+  Bell,
   Clock,
   Copy,
   Forward,
@@ -168,6 +169,7 @@ function MessageBubble({
   onShowInfo,
   onShowEditHistory,
   onImportant,
+  onRemind,
   onListened,
   senderAvatar,
 }) {
@@ -466,6 +468,12 @@ function MessageBubble({
               <button type="button" role="menuitem" onClick={() => { closeAll(); onImportant(messageId); }}>
                 <span className="message-menu-icon" aria-hidden="true"><Pin size={16} strokeWidth={2} /></span>
                 <span>{important ? 'Remove from important' : 'Save as important'}</span>
+              </button>
+            )}
+            {onRemind && (
+              <button type="button" role="menuitem" onClick={() => { closeAll(); onRemind(message); }}>
+                <span className="message-menu-icon" aria-hidden="true"><Bell size={16} strokeWidth={2} /></span>
+                <span>{t('chat.remindMe', 'Remind me')}</span>
               </button>
             )}
             {onPin && (

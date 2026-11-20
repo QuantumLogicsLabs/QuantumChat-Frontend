@@ -5996,6 +5996,7 @@ useEffect(() => {
                               onForward={setForwardMessage}
                               onStar={handleStarMessage}
                               onImportant={handleImportantMessage}
+                              onRemind={setReminderMessage}
                               onPin={handlePinMessage}
                               onVotePoll={
                                 isGroupChat ? handleVotePoll : undefined
