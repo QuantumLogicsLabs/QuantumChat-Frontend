@@ -1,4 +1,5 @@
 import {
+  Bell,
   Copy,
   Forward,
   Info,
@@ -10,8 +11,8 @@ import {
   Trash2,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import BottomSheet from '../ui/BottomSheet.jsx';
 import { QUICK_REACTIONS } from '../../utils/emojis.js';
+import BottomSheet from '../ui/BottomSheet.jsx';
 
 /**
  * Long-press message action sheet (mobile) + quick reactions.
@@ -30,6 +31,7 @@ export default function MessageActionSheet({
   onStar,
   onImportant,
   onPin,
+  onRemind,
   onShowInfo,
   starred = false,
   important = false,
@@ -100,6 +102,11 @@ export default function MessageActionSheet({
         {onImportant ? (
           <button type="button" role="menuitem" onClick={() => run(onImportant)}>
             <Pin size={18} /> {important ? 'Remove from important' : 'Save as important'}
+          </button>
+        ) : null}
+        {onRemind ? (
+          <button type="button" role="menuitem" onClick={() => run(onRemind)}>
+            <Bell size={18} /> {t('chat.remindMe', 'Remind me')}
           </button>
         ) : null}
         <button type="button" role="menuitem" onClick={() => run(onPin)}>
