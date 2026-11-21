@@ -34,6 +34,7 @@ import LazyChunkErrorBoundary, { ModalLoadingFallback } from './LazyChunkErrorBo
 const HighlightPickerSheet = lazy(() => import('./HighlightPickerSheet.jsx'));
 const StoryHistoryPanel = lazy(() => import('./StoryHistoryPanel.jsx'));
 const TextStoryComposer = lazy(() => import('./TextStoryComposer.jsx'));
+const StoryMediaEditor = lazy(() => import('./StoryMediaEditor.jsx'));
 const MAX_STORY_SECONDS = 60;
 const MAX_STORY_UPLOAD_BYTES = 95 * 1024 * 1024; // stay under server 100MB limit
 const COMPRESS_IF_LARGER_THAN = 4 * 1024 * 1024; // compress status videos over ~4MB
@@ -190,6 +191,8 @@ const StoriesRail = forwardRef(function StoriesRail(
   const [unavailable, setUnavailable] = useState(false);
   const [createSheetOpen, setCreateSheetOpen] = useState(false);
   const [textComposerOpen, setTextComposerOpen] = useState(false);
+  const [editingFile, setEditingFile] = useState(null);
+  const [editingRemaining, setEditingRemaining] = useState([]);
   const [historyOpen, setHistoryOpen] = useState(false);
  const [historyTab, setHistoryTab] = useState('drafts');
   const [draftCount, setDraftCount] = useState(0);
@@ -388,8 +391,16 @@ const StoriesRail = forwardRef(function StoriesRail(
     setCreateSheetOpen(false);
     setTextComposerOpen(false);
     setComposerError('');
- setPendingQueue(files);
-   setPendingIndex(0);
+    const first = files[0];
+    const editable = first.type.startsWith('image/') || first.type.startsWith('video/') ||
+      /\.(mp4|mov|webm|m4v|mkv)$/i.test(first.name || '');
+    if (editable) {
+      setEditingFile(first);
+      setEditingRemaining(files.slice(1));
+      return;
+    }
+    setPendingQueue(files);
+    setPendingIndex(0);
     setPendingPreviewUrl(URL.createObjectURL(files[0]));
   }
 
@@ -646,6 +657,8 @@ const StoriesRail = forwardRef(function StoriesRail(
     setPendingQueue([]);
     setPendingIndex(0);
      setPendingPreviewUrl(null);
+     setEditingFile(null);
+     setEditingRemaining([]);
      setTextComposerOpen(false);
      setComposerError('');
     setBatchProgress(null);
@@ -867,6 +880,31 @@ const StoriesRail = forwardRef(function StoriesRail(
             </button>
           </div>
         </div>
+      )}
+      {editingFile && (
+        <LazyChunkErrorBoundary onClose={() => {
+          setEditingFile(null);
+          setEditingRemaining([]);
+        }}>
+          <Suspense fallback={<ModalLoadingFallback />}>
+            <StoryMediaEditor
+              file={editingFile}
+              onCancel={() => {
+                setEditingFile(null);
+                setEditingRemaining([]);
+              }}
+              onError={reportStoryError}
+              onDone={async (editedFile) => {
+                const queue = [editedFile, ...editingRemaining];
+                setEditingFile(null);
+                setEditingRemaining([]);
+                setPendingQueue(queue);
+                setPendingIndex(0);
+                setPendingPreviewUrl(URL.createObjectURL(editedFile));
+              }}
+            />
+          </Suspense>
+        </LazyChunkErrorBoundary>
       )}
      {pendingQueue.length > 0 && (
         <StoryComposer
