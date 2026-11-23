@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import StoryMentionPicker from './StoryMentionPicker.jsx';
+import { safeStoryObjectUrl } from '../utils/storyMedia.js';
 
 const TTL_PRESETS = [
   { label: '1 hour', ms: 60 * 60 * 1000 },
@@ -117,9 +118,9 @@ export function StoryLocalPreview({ file, previewUrl, onClose }) {
           </button>
         </div>
         <div className="story-local-preview-media">
-          {kind === 'image' && <img src={previewUrl} alt="Status preview" />}
-          {kind === 'video' && <video src={previewUrl} controls autoPlay />}
-          {kind === 'audio' && <audio src={previewUrl} controls autoPlay />}
+          {kind === 'image' && <img src={safeStoryObjectUrl(previewUrl)} alt="Status preview" />}
+          {kind === 'video' && <video src={safeStoryObjectUrl(previewUrl)} controls autoPlay />}
+          {kind === 'audio' && <audio src={safeStoryObjectUrl(previewUrl)} controls autoPlay />}
           {kind === 'file' && <p className="empty-hint">Preview not available for this file type</p>}
         </div>
         <button type="button" className="story-composer-post" onClick={onClose}>
