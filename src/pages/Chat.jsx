@@ -815,15 +815,26 @@ useEffect(() => {
 
   // ---- Notification action handling (Reply / Mark as Read / call actions) ---
   const [notificationAction, setNotificationAction] = useState(null);
-   useEffect(() => {
+     const reminderHandledRef = useRef(null);
+  useEffect(() => {
     const mid = new URLSearchParams(location.search).get('reminder');
-    if (!mid) return;
+    if (!mid || reminderHandledRef.current === mid) return;
     const el = document.getElementById(`msg-${mid}`);
-    if (!el) return; // retries when `messages` loads
+    if (!el) return; // retries when `messages` finishes loading
+
+    reminderHandledRef.current = mid; // only scroll and show the toast once
     el.scrollIntoView({ block: 'center', behavior: 'smooth' });
     el.classList.add('qc-msg-highlight');
-    const t = setTimeout(() => el.classList.remove('qc-msg-highlight'), 2500);
-    return () => clearTimeout(t);
+    setTimeout(() => el.classList.remove('qc-msg-highlight'), 2500);
+
+    const m = messages.find((x) => String(x.id || x._id) === mid);
+    if (m) {
+      const fromId = String(m.from?._id || m.from);
+      const who = fromId === String(user?.id) ? 'You' : usernameById.get(fromId) || 'Someone';
+      const text = getMessagePreviewText(m) || 'Attachment';
+      const preview = text.length > 160 ? `${text.slice(0, 160)}…` : text;
+      showToast(`Reminder · ${who}: ${preview}`, 'info');
+    }
   }, [location.search, messages]);
 
   // Path A — cold boot via openWindow(), action arrives as query params.
