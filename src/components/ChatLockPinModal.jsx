@@ -1,5 +1,5 @@
-import { Lock, X } from 'lucide-react';
 import { useState } from 'react';
+import { Lock, X } from 'lucide-react';
 
 /**
  * Generic PIN prompt used by Chat Lock: unlock a locked chat, confirm
@@ -70,7 +70,11 @@ export default function ChatLockPinModal({
           <label className="create-group-field">
             <span className="create-group-label">PIN</span>
             <input
-              type="password"
+              type="text"
+              style={{ WebkitTextSecurity: 'disc' }}
+              name="chat-lock-pin"
+              data-lpignore="true"
+              data-1p-ignore="true"
               inputMode="numeric"
               pattern="[0-9]*"
               maxLength={8}
